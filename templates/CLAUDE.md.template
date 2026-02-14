@@ -1,0 +1,95 @@
+# {{PROJECT_NAME}}
+
+> **Read `.mind/STATE.md` before doing anything.** It tells you where the project is right now.
+
+---
+
+## The Mind Protocol
+
+This project uses **MemoryForge** for persistent memory across Claude Code sessions. Memory survives context compactions, session restarts, and multi-day work.
+
+### How It Works
+
+1. **Session Start:** A hook reads `.mind/` files and injects a "Morning Briefing" into context
+2. **During Work:** A lightweight state reminder is injected before each prompt
+3. **Before Compaction:** A checkpoint is saved, then re-injected after context compression
+4. **Session End:** A hook warns if `.mind/` files haven't been updated
+
+### The Persistent Memory Loop
+
+```
+Session starts
+    |
+    v
+SessionStart hook --> Reads .mind/ --> Injects briefing into context
+    |
+    v
+Work happens (context grows)
+    |
+    v
+Context approaching limit
+    |
+    v
+PreCompact hook --> Saves checkpoint to .mind/checkpoints/latest.md
+    |
+    v
+Context compacted (compressed)
+    |
+    v
+SessionStart hook fires AGAIN (source=compact) --> Restores full briefing
+    |
+    v
+Work continues with context restored
+```
+
+### .mind/ Directory
+
+| File | Purpose |
+|------|---------|
+| `STATE.md` | Current phase, status, active work, blockers, next action |
+| `PROGRESS.md` | Phase-by-phase task tracking with checkboxes |
+| `DECISIONS.md` | Decision log with rationale and status |
+| `SESSION-LOG.md` | Chronological summary of each work session |
+| `checkpoints/` | Pre-compaction snapshots (auto-managed) |
+
+### Session Start Checklist
+
+```
+[ ] Read .mind/STATE.md — know where we are
+[ ] Read .mind/PROGRESS.md — know what's next
+[ ] Read .mind/DECISIONS.md — know what constraints exist
+[ ] Pick next task
+[ ] Work
+[ ] Update .mind/ files before ending
+```
+
+### Session End Checklist
+
+Before ending any work session, update:
+
+1. `.mind/STATE.md` — Current phase, status, blockers, next action
+2. `.mind/PROGRESS.md` — Check off completed tasks, add new ones
+3. `.mind/DECISIONS.md` — Record any decisions made (if applicable)
+4. `.mind/SESSION-LOG.md` — Append session summary
+
+### Rules
+
+| # | Rule |
+|---|------|
+| A | **Always read STATE.md FIRST** — before any work, know where we are |
+| B | **Check PROGRESS.md for what's next** — don't guess, read the queue |
+| C | **Check DECISIONS.md for constraints** — past decisions may affect work |
+| D | **Update all .mind/ files at session end** — future sessions depend on this |
+| E | **Never assume — always check state** — even if you "remember," verify against .mind/ |
+
+---
+
+## Project Overview
+
+{{PROJECT_DESCRIPTION}}
+
+---
+
+## Coding Standards
+
+{{CODING_STANDARDS}}
