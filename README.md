@@ -1,101 +1,80 @@
-# MemoryForge
+<p align="center">
+  <h1 align="center">MemoryForge</h1>
+  <p align="center">
+    <strong>Persistent memory for Claude Code.</strong><br>
+    Survive context compactions, session restarts, and multi-agent isolation.
+  </p>
+  <p align="center">
+    <a href="#quick-start">Quick Start</a> &middot;
+    <a href="#how-it-works">How It Works</a> &middot;
+    <a href="#installation-tiers">Installation Tiers</a> &middot;
+    <a href="#extensions">Extensions</a> &middot;
+    <a href="docs/ARCHITECTURE.md">Architecture</a>
+  </p>
+</p>
 
-**Persistent memory for Claude Code.** Survive context compactions, session restarts, and multi-day projects.
-
-Claude Code forgets everything when context compacts or sessions end. MemoryForge fixes that with a hook-driven memory loop that automatically saves and restores project state.
+---
 
 ## The Problem
 
+Claude Code has three memory limitations that break long-running projects:
+
 | Limitation | What Happens | Impact |
-|-----------|-------------|--------|
-| **Context Window** | Old messages compressed when context fills up | Claude loses details about earlier work |
-| **Session Boundaries** | Closing Claude Code loses all conversation context | Next session starts from scratch |
-| **Agent Isolation** | Subagents don't share memory with parent or each other | Agents duplicate work or contradict each other |
+|:---|:---|:---|
+| **Context compaction** | Old messages compressed when context fills | Claude forgets earlier work mid-session |
+| **Session boundaries** | Closing Claude Code loses all context | Next session starts from zero |
+| **Agent isolation** | Subagents don't share memory with each other | Teams duplicate work or contradict each other |
 
 ## The Solution
 
-MemoryForge uses Claude Code hooks + Markdown state files to create a **persistent memory loop**:
+MemoryForge uses **Claude Code hooks** + **Markdown state files** to create a persistent memory loop that survives all three:
 
 ```
-Session starts -----> Hook reads .mind/ files -----> Briefing injected into context
-                                                              |
-Work continues <---- Hook re-injects briefing <---- Context compacted
-        |                                                     ^
-        v                                                     |
-Context grows -----> Hook saves checkpoint -----> Compaction triggers
+  Session starts ───> Hook reads .mind/ ───> Briefing injected into context
+       ^                                              |
+       |                                              v
+       |                                        Work happens
+       |                                              |
+  Hook re-injects <─── Context compacted <─── Hook saves checkpoint
+  briefing (source=compact)
 ```
 
-**Result:** Claude maintains full awareness of project state across unlimited sessions and compaction cycles. No external services required.
+**Zero dependencies.** No databases, no APIs, no npm packages. Just bash scripts and Markdown files.
+
+---
 
 ## Quick Start
 
-### Install into your project
+**1. Clone:**
 
-**Unix/macOS/Git Bash:**
 ```bash
-git clone https://github.com/YOUR_USERNAME/MemoryForge.git
-cd MemoryForge
-bash install.sh /path/to/your/project
+git clone https://github.com/marolinik/MemoryForge.git
 ```
 
-**Windows PowerShell:**
-```powershell
-git clone https://github.com/YOUR_USERNAME/MemoryForge.git
-cd MemoryForge
-.\install.ps1 -TargetDir "C:\path\to\your\project"
+**2. Install into your project:**
+
+```bash
+# Unix / macOS / Git Bash on Windows
+bash MemoryForge/install.sh /path/to/your/project
+
+# Windows PowerShell
+.\MemoryForge\install.ps1 -TargetDir "C:\path\to\your\project"
 ```
 
-### What gets installed
-
-```
-your-project/
-├── .claude/
-│   ├── settings.json        # Hook configuration
-│   └── agents/
-│       └── mind.md          # Mind agent (state keeper)
-├── scripts/
-│   └── hooks/
-│       ├── session-start.sh     # Injects briefing on startup/compact
-│       ├── pre-compact.sh       # Saves checkpoint before compaction
-│       ├── user-prompt-context.sh # Lightweight state nudge per prompt
-│       ├── stop-checkpoint.sh   # Activity timestamp + stale reminders
-│       ├── session-end.sh       # Session end logging
-│       ├── subagent-start.sh    # Agent spawn tracking
-│       ├── subagent-stop.sh     # Agent completion tracking
-│       └── task-completed.sh    # Task completion logging
-└── .mind/
-    ├── STATE.md             # Current phase, status, next action
-    ├── PROGRESS.md          # Task tracking with checkboxes
-    ├── DECISIONS.md         # Decision log with rationale
-    ├── SESSION-LOG.md       # Session history
-    └── checkpoints/         # Auto-managed compaction snapshots
-```
-
-### Configure your CLAUDE.md
-
-Add the Mind Protocol section to your project's `CLAUDE.md`. See `templates/CLAUDE.md.template` for the full section to copy.
-
-The key instructions tell Claude to:
-1. Read `.mind/STATE.md` before starting any work
-2. Update `.mind/` files before ending any session
-3. Never assume state — always verify against `.mind/` files
-
-### Start working
+**3. Start Claude Code:**
 
 ```bash
 cd your-project
-claude  # Start Claude Code — the session-start hook fires automatically
+claude
 ```
 
-Claude will see a briefing like:
+Claude sees a briefing like this automatically:
 
 ```
 === SESSION BRIEFING ===
 Starting a new session. Read the state below and pick up the next task.
 
 --- CURRENT STATE (.mind/STATE.md) ---
-# Project State
-
 ## Current Phase
 Phase 2: API Development — IN PROGRESS
 
@@ -104,44 +83,143 @@ Implement the authentication middleware
 ...
 ```
 
+That's it. Memory persists across sessions and compaction cycles.
+
+---
+
+## Installation Tiers
+
+MemoryForge has a modular design. Install only what you need:
+
+### Tier 1: Core (default)
+
+Hooks + `.mind/` state files + Mind agent. Covers 90% of use cases.
+
+```bash
+bash install.sh /path/to/project
+```
+
+### Tier 2: + Team Agents
+
+Adds orchestrator and builder agents for multi-agent coordination.
+
+```bash
+bash install.sh /path/to/project --with-team
+```
+
+### Tier 3: + Semantic Memory
+
+Adds vector memory for "What did we learn about X?" queries.
+
+```bash
+bash install.sh /path/to/project --with-vector
+```
+
+### Tier 4: Full Stack
+
+Core + team + vector + graph (Neo4j). Maximum coverage for complex multi-agent projects.
+
+```bash
+bash install.sh /path/to/project --full
+```
+
+### Project vs. User Level
+
+| | Project-Level | User-Level (`--global`) |
+|:---|:---|:---|
+| **Where** | `project/.claude/` | `~/.claude/` |
+| **Scope** | This project only | All Claude Code projects |
+| **State files** | `project/.mind/` | Still per-project |
+| **Use case** | "Memory on THIS project" | "Memory on EVERY project" |
+
+```bash
+# Install globally (all projects get memory)
+bash install.sh --global
+
+# Then add .mind/ to specific projects
+bash install.sh /path/to/project-a
+bash install.sh /path/to/project-b
+```
+
+### All Flags
+
+| Flag | Bash | PowerShell |
+|:---|:---|:---|
+| Core only | `bash install.sh [dir]` | `.\install.ps1 -TargetDir dir` |
+| + Team agents | `--with-team` | `-WithTeam` |
+| + Vector memory | `--with-vector` | `-WithVector` |
+| + Graph memory | `--with-graph` | `-WithGraph` |
+| All extensions | `--full` | `-Full` |
+| User-level | `--global` | `-Global` |
+| Help | `--help` | — |
+
+---
+
 ## How It Works
 
 ### 8 Hooks, 4 State Files
 
-**Hooks** (automatic, you never run these manually):
+**Hooks** fire automatically on Claude Code lifecycle events:
 
-| Hook | When | What |
-|------|------|------|
-| `session-start` | Session start + after compaction | Reads `.mind/`, injects full briefing |
-| `pre-compact` | Before context compression | Saves checkpoint to `.mind/checkpoints/` |
-| `user-prompt-context` | Before each prompt is processed | One-line state reminder |
-| `stop-checkpoint` | After each Claude response | Writes activity timestamp |
-| `session-end` | Session terminates | Logs end, warns if state stale |
-| `subagent-start` | Agent spawned | Logs agent activity |
-| `subagent-stop` | Agent finishes | Logs completion, nudges to update |
-| `task-completed` | Task marked done | Logs task completion |
+| Hook | Event | What It Does |
+|:---|:---|:---|
+| `session-start` | Startup + resume + **after compaction** | Reads `.mind/`, injects full briefing into context |
+| `pre-compact` | Before context compression | Saves checkpoint to `.mind/checkpoints/latest.md` |
+| `user-prompt-context` | Before each prompt | One-line state nudge: phase + next action |
+| `stop-checkpoint` | After each Claude response | Writes activity timestamp, warns if state stale |
+| `session-end` | Session terminates | Logs session end, warns if `.mind/` not updated |
+| `subagent-start` | Agent spawned | Logs agent activity to `.mind/.agent-activity` |
+| `subagent-stop` | Agent finishes | Logs completion, nudges to update progress |
+| `task-completed` | Task marked done | Logs to `.mind/.task-completions` |
 
-**State Files** (you and Claude maintain these):
+**State files** are human-readable Markdown that you and Claude co-maintain:
 
-| File | Purpose | Update Frequency |
-|------|---------|-----------------|
+| File | Question It Answers | Updated |
+|:---|:---|:---|
 | `STATE.md` | Where are we right now? | Every session |
 | `PROGRESS.md` | What's done, what's next? | As tasks complete |
-| `DECISIONS.md` | Why did we choose X? | When decisions are made |
-| `SESSION-LOG.md` | What happened each session? | End of each session |
+| `DECISIONS.md` | Why did we choose X over Y? | When decisions are made |
+| `SESSION-LOG.md` | What happened in each session? | End of each session |
 
 ### The Mind Agent
 
-The Mind agent (`.claude/agents/mind.md`) is a specialized agent that only reads and writes `.mind/` files. It never writes code. Use it to:
+The Mind agent (`.claude/agents/mind.md`) is a specialized agent that **only** reads and writes `.mind/` files. It never writes code.
 
-- Get a status report: "Where are we?"
-- Update state after work: "Update .mind/ files with what we just did"
-- Record a decision: "Log this decision in DECISIONS.md"
+```
+# Spawn it to get a status report
+Task(subagent_type: "mind", prompt: "Read .mind/ and report current status")
 
-Spawn it:
+# Spawn it to save state
+Task(subagent_type: "mind", prompt: "Update .mind/ with what we did this session")
 ```
-Task(subagent_type: "mind", prompt: "Read .mind/ files and report current status")
+
+### What Gets Installed
+
 ```
+your-project/
+├── .claude/
+│   ├── settings.json          # Hook configuration (8 hooks wired)
+│   └── agents/
+│       └── mind.md            # Mind agent (state keeper)
+├── scripts/
+│   └── hooks/
+│       ├── session-start.sh       # [CRITICAL] Morning briefing
+│       ├── pre-compact.sh         # [CRITICAL] Checkpoint before compaction
+│       ├── user-prompt-context.sh # Per-prompt state nudge
+│       ├── stop-checkpoint.sh     # Activity timestamp
+│       ├── session-end.sh         # Session end logging
+│       ├── subagent-start.sh      # Agent spawn tracking
+│       ├── subagent-stop.sh       # Agent completion tracking
+│       └── task-completed.sh      # Task completion logging
+└── .mind/
+    ├── STATE.md                # Current phase, status, next action
+    ├── PROGRESS.md             # Task tracking with checkboxes
+    ├── DECISIONS.md            # Decision log with rationale
+    ├── SESSION-LOG.md          # Session history
+    └── checkpoints/            # Auto-managed compaction snapshots
+```
+
+---
 
 ## Extensions
 
@@ -149,98 +227,146 @@ Task(subagent_type: "mind", prompt: "Read .mind/ files and report current status
 
 Multi-agent coordination with shared state. Adds orchestrator and builder agents that all read from the same `.mind/` directory.
 
-See: `extensions/team-memory/README.md`
+```bash
+bash install.sh /path/to/project --with-team
+```
+
+See: [`extensions/team-memory/`](extensions/team-memory/README.md)
 
 ### Vector Memory
 
-Semantic search across project knowledge. Ask "What did we learn about X?" and get relevant memories by meaning, not keywords.
+Semantic search across project knowledge. Ask "What did we learn about authentication?" and get relevant memories by meaning, not keywords.
 
-See: `extensions/vector-memory/README.md`
+Three implementation options: file-based (zero deps), LanceDB (lightweight), or ChromaDB (full-featured).
+
+```bash
+bash install.sh /path/to/project --with-vector
+```
+
+See: [`extensions/vector-memory/`](extensions/vector-memory/README.md)
 
 ### Graph Memory
 
-Neo4j-backed state for complex relationships — task dependencies, agent hierarchies, decision chains, artifact lineage.
+Neo4j-backed state for complex relationships — task dependencies, agent hierarchies, decision chains, quality loops.
 
-See: `extensions/graph-memory/README.md`
+```bash
+bash install.sh /path/to/project --with-graph
+```
+
+See: [`extensions/graph-memory/`](extensions/graph-memory/README.md)
+
+### Coverage Matrix
+
+| Capability | Core | +Team | +Vector | +Graph |
+|:---|:---:|:---:|:---:|:---:|
+| Session persistence | yes | yes | yes | yes |
+| Compaction survival | yes | yes | yes | yes |
+| Multi-agent state | - | yes | - | yes |
+| "What did we learn about X?" | - | - | yes | - |
+| Task dependency graphs | - | - | - | yes |
+| Quality loop tracking | - | - | - | yes |
+| Zero dependencies | yes | yes | - | - |
+
+---
 
 ## Requirements
 
 - **Claude Code** (any version with hooks support)
 - **bash** (Git Bash on Windows, native on macOS/Linux)
-- **node** (any version — used for JSON formatting, no npm packages)
+- **node** (any version — used only for JSON formatting, no npm packages)
 
-No external services, no API keys, no database. Just files and shell scripts.
+Extensions may have additional requirements (LanceDB, ChromaDB, Docker for Neo4j).
 
-## Project Structure
-
-```
-MemoryForge/
-├── README.md                        # This file
-├── LICENSE                          # MIT
-├── install.sh                       # Unix/macOS installer
-├── install.ps1                      # Windows PowerShell installer
-├── install.bat                      # Windows batch wrapper
-├── .claude/
-│   ├── settings.json                # Hook configuration
-│   └── agents/
-│       └── mind.md                  # Mind agent definition
-├── scripts/
-│   └── hooks/
-│       ├── session-start.sh         # [CRITICAL] Morning briefing
-│       ├── pre-compact.sh           # [CRITICAL] Checkpoint before compact
-│       ├── user-prompt-context.sh   # Per-prompt state nudge
-│       ├── stop-checkpoint.sh       # Activity timestamp
-│       ├── session-end.sh           # Session end logging
-│       ├── subagent-start.sh        # Agent spawn tracking
-│       ├── subagent-stop.sh         # Agent completion tracking
-│       └── task-completed.sh        # Task completion logging
-├── templates/
-│   ├── .mind/
-│   │   ├── STATE.md                 # Template state file
-│   │   ├── DECISIONS.md             # Template decision log
-│   │   ├── PROGRESS.md              # Template progress tracker
-│   │   └── SESSION-LOG.md           # Template session log
-│   └── CLAUDE.md.template           # Memory section for CLAUDE.md
-├── extensions/
-│   ├── team-memory/                 # Multi-agent coordination
-│   │   ├── README.md
-│   │   └── agents/
-│   │       ├── orchestrator.md
-│   │       └── builder.md
-│   ├── vector-memory/               # Semantic search
-│   │   └── README.md
-│   └── graph-memory/                # Neo4j relationships
-│       ├── README.md
-│       └── docker-compose.yml
-└── docs/
-    ├── ARCHITECTURE.md              # How the memory system works
-    ├── HOOKS-REFERENCE.md           # Detailed hook documentation
-    └── TROUBLESHOOTING.md           # Common issues and fixes
-```
+---
 
 ## FAQ
 
-**Q: Does this work on Windows?**
-A: Yes. Hook scripts use bash (Git Bash on Windows) and node. Both are standard for developers on Windows.
+<details>
+<summary><strong>Does this work on Windows?</strong></summary>
 
-**Q: Does this require an internet connection?**
-A: No. Everything is local files and shell scripts. No external APIs or services.
+Yes. Hook scripts use bash (Git Bash, included with Git for Windows) and node. Both are standard developer tools on Windows.
+</details>
 
-**Q: How much context does the briefing consume?**
-A: Typically 500-2000 tokens, depending on the size of your `.mind/` files. The hooks are designed to extract only the most relevant state.
+<details>
+<summary><strong>Does this need an internet connection?</strong></summary>
 
-**Q: Can I use this with existing hooks?**
-A: Yes. If you already have `.claude/settings.json`, the installer saves a reference config and you can manually merge the hooks.
+No. Everything is local files and shell scripts. No external APIs, no cloud services, no telemetry.
+</details>
 
-**Q: What if I forget to update `.mind/` files?**
-A: The stop-checkpoint and session-end hooks will remind you if STATE.md hasn't been updated in 30+ minutes.
+<details>
+<summary><strong>How much context does the briefing consume?</strong></summary>
 
-**Q: Does this work with Claude Code teams/swarms?**
-A: Yes. The subagent hooks track agent spawns and completions. All agents can read the same `.mind/` directory. See the Team Memory extension for dedicated team agents.
+Typically 500-2,000 tokens, depending on `.mind/` file sizes. The hooks extract only the most relevant state (last 20 lines of session log, last 5 decisions, active progress sections).
+</details>
 
-**Q: Can I version control `.mind/` files?**
-A: Yes, and you should. The main files (STATE.md, PROGRESS.md, DECISIONS.md, SESSION-LOG.md) are designed for git. Auto-generated tracking files (.last-activity, .agent-activity, etc.) and checkpoints are gitignored.
+<details>
+<summary><strong>Can I use this with existing hooks?</strong></summary>
+
+Yes. If you already have `.claude/settings.json`, the installer saves a reference config (`settings.memoryforge.json`) and you merge manually. Claude Code supports multiple hooks per event.
+</details>
+
+<details>
+<summary><strong>What if I forget to update .mind/ files?</strong></summary>
+
+The `stop-checkpoint` and `session-end` hooks remind you if `STATE.md` hasn't been updated in 30+ minutes. You can also spawn the Mind agent at session end to do it for you.
+</details>
+
+<details>
+<summary><strong>Does this work with Claude Code teams/swarms?</strong></summary>
+
+Yes. Subagent hooks track spawns and completions automatically. All agents read the same `.mind/` directory. The Team Memory extension adds dedicated orchestrator and builder agents.
+</details>
+
+<details>
+<summary><strong>Can I version control .mind/ files?</strong></summary>
+
+Yes, and you should. The human-edited state files (STATE.md, PROGRESS.md, DECISIONS.md, SESSION-LOG.md) are designed for git. Auto-generated tracking files and checkpoints are gitignored.
+</details>
+
+<details>
+<summary><strong>What's the difference between --global and project-level?</strong></summary>
+
+Project-level installs hooks into `your-project/.claude/` — only that project gets memory. Global (`--global`) installs into `~/.claude/` — every Claude Code project gets memory hooks. State files (`.mind/`) are always per-project regardless.
+</details>
+
+<details>
+<summary><strong>How is this different from claude-mem, CLAUDE.md, or other memory tools?</strong></summary>
+
+Most memory tools store facts in a flat file or database. MemoryForge is a **structured state protocol**: 4 purpose-built files (status, progress, decisions, sessions), 8 lifecycle hooks for automatic save/restore, checkpoint system for compaction survival, and extension points for teams, vectors, and graphs. It's designed for multi-session, multi-agent projects — not just single-agent chat memory.
+</details>
+
+---
+
+## Documentation
+
+| Doc | What's In It |
+|:---|:---|
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | How the memory loop works, layer model, state file design |
+| [`docs/HOOKS-REFERENCE.md`](docs/HOOKS-REFERENCE.md) | Detailed reference for all 8 hooks |
+| [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) | Common issues and fixes |
+| [`docs/TEAM-EXTENSION.md`](docs/TEAM-EXTENSION.md) | Multi-agent team coordination guide |
+| [`templates/CLAUDE.md.template`](templates/CLAUDE.md.template) | Mind Protocol section to add to your CLAUDE.md |
+
+---
+
+## Contributing
+
+Contributions welcome. Please open an issue first to discuss what you'd like to change.
+
+1. Fork it
+2. Create your feature branch (`git checkout -b feature/amazing`)
+3. Commit your changes
+4. Push to the branch (`git push origin feature/amazing`)
+5. Open a pull request
+
+---
 
 ## License
 
-MIT
+[MIT](LICENSE)
+
+---
+
+<p align="center">
+  <sub>Built for the Claude Code community. No affiliation with Anthropic.</sub>
+</p>

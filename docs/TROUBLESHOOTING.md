@@ -179,7 +179,7 @@ If you encounter an issue not covered here:
 1. Check that `bash` and `node` are available in your PATH
 2. Run the affected hook manually with test input (see examples above)
 3. Check the hook script source code — they're well-commented
-4. Open an issue on GitHub with:
+4. Open an issue at https://github.com/marolinik/MemoryForge/issues with:
    - Your OS (Windows/macOS/Linux)
    - Claude Code version
    - The error message or unexpected behavior

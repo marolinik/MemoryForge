@@ -1,124 +1,266 @@
 # =============================================================================
 # MemoryForge Installer (Windows PowerShell)
 # =============================================================================
-# Usage: .\install.ps1 [-TargetDir "C:\path\to\project"]
+# Usage:
+#   .\install.ps1                                        # Core (current dir)
+#   .\install.ps1 -TargetDir "C:\my\project"             # Core (specific project)
+#   .\install.ps1 -TargetDir "C:\my\project" -WithTeam   # Core + Team agents
+#   .\install.ps1 -TargetDir "C:\my\project" -Full       # Core + all extensions
+#   .\install.ps1 -Global                                # Core (user-level)
+#   .\install.ps1 -Global -Full                          # User-level + everything
 #
-# If no target directory is provided, installs into the current directory.
+# Docs: https://github.com/marolinik/MemoryForge
 # =============================================================================
 
 param(
-    [string]$TargetDir = "."
+    [string]$TargetDir = ".",
+    [switch]$Global,
+    [switch]$WithTeam,
+    [switch]$WithVector,
+    [switch]$WithGraph,
+    [switch]$Full
 )
 
 $ErrorActionPreference = "Stop"
 
-$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$TargetDir = (Resolve-Path $TargetDir).Path
+# Expand -Full into individual flags
+if ($Full) { $WithTeam = $true; $WithVector = $true; $WithGraph = $true }
 
-Write-Host "=== MemoryForge Installer ===" -ForegroundColor Blue
-Write-Host "Source:  $ScriptDir"
-Write-Host "Target:  $TargetDir"
+$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+
+# Determine target
+if ($Global) {
+    $ClaudeDir = Join-Path $env:USERPROFILE ".claude"
+    $Scope = "user"
+} else {
+    $TargetDir = (Resolve-Path $TargetDir).Path
+    $ClaudeDir = Join-Path $TargetDir ".claude"
+    $Scope = "project"
+}
+
+# Count extensions
+$extNames = @()
+if ($WithTeam)   { $extNames += "team" }
+if ($WithVector) { $extNames += "vector" }
+if ($WithGraph)  { $extNames += "graph" }
+
+# Header
+Write-Host ""
+Write-Host "  MemoryForge Installer" -ForegroundColor Blue
+Write-Host "  Persistent memory for Claude Code" -ForegroundColor DarkGray
+Write-Host ""
+Write-Host "  Source  $ScriptDir" -ForegroundColor Cyan
+if ($Global) {
+    Write-Host "  Target  ~/.claude/ (user-level - all projects)" -ForegroundColor Cyan
+} else {
+    Write-Host "  Target  $TargetDir (project-level)" -ForegroundColor Cyan
+}
+Write-Host "  Scope   Core + $($extNames.Count) extension(s) $($extNames -join ', ')" -ForegroundColor Cyan
 Write-Host ""
 
-# --- 1. Copy hook scripts ---
-Write-Host "[1/5] Installing hook scripts..." -ForegroundColor Yellow
-$hooksDir = Join-Path $TargetDir "scripts\hooks"
+# Step counter
+$totalSteps = 5 + $extNames.Count
+$currentStep = 0
+
+function Step($msg) {
+    $script:currentStep++
+    Write-Host "[$script:currentStep/$totalSteps] $msg" -ForegroundColor Yellow
+}
+function Ok($msg)   { Write-Host "    $msg" -ForegroundColor Green }
+function Skip($msg) { Write-Host "    $msg (skipped - already exists)" -ForegroundColor DarkGray }
+function Warn($msg) { Write-Host "    $msg" -ForegroundColor Yellow }
+
+# =============================================================================
+# STEP 1: Hook scripts
+# =============================================================================
+Step "Installing hook scripts..."
+
+if ($Global) {
+    $hooksDir = Join-Path $env:USERPROFILE ".claude\hooks"
+} else {
+    $hooksDir = Join-Path $TargetDir "scripts\hooks"
+}
+
 New-Item -ItemType Directory -Force -Path $hooksDir | Out-Null
 Copy-Item "$ScriptDir\scripts\hooks\*.sh" $hooksDir -Force
-Write-Host "  Copied 8 hook scripts to scripts\hooks\" -ForegroundColor Green
+Ok "Copied 8 hooks to $hooksDir"
 
-# --- 2. Install or merge .claude/settings.json ---
-Write-Host "[2/5] Configuring hooks in .claude\settings.json..." -ForegroundColor Yellow
-$claudeDir = Join-Path $TargetDir ".claude"
-New-Item -ItemType Directory -Force -Path $claudeDir | Out-Null
+# =============================================================================
+# STEP 2: Hook configuration
+# =============================================================================
+Step "Configuring .claude\settings.json..."
+New-Item -ItemType Directory -Force -Path $ClaudeDir | Out-Null
 
-$settingsPath = Join-Path $claudeDir "settings.json"
+$settingsPath = Join-Path $ClaudeDir "settings.json"
+
 if (Test-Path $settingsPath) {
     $content = Get-Content $settingsPath -Raw
     if ($content -match "session-start\.sh") {
-        Write-Host "  Hooks already configured in .claude\settings.json (skipped)" -ForegroundColor Green
+        Skip ".claude\settings.json already has MemoryForge hooks"
     } else {
-        Write-Host "  WARNING: .claude\settings.json exists but has no MemoryForge hooks." -ForegroundColor Yellow
-        Write-Host "  Manually merge hooks from: $ScriptDir\.claude\settings.json" -ForegroundColor Yellow
-        Copy-Item "$ScriptDir\.claude\settings.json" (Join-Path $claudeDir "settings.memoryforge.json")
-        Write-Host "  Saved reference config to .claude\settings.memoryforge.json" -ForegroundColor Green
+        Warn "Existing .claude\settings.json found without MemoryForge hooks."
+        Warn "Saving reference config - merge manually."
+        $refPath = Join-Path $ClaudeDir "settings.memoryforge.json"
+        Copy-Item "$ScriptDir\.claude\settings.json" $refPath
+        if ($Global) {
+            $refContent = Get-Content $refPath -Raw
+            $refContent = $refContent -replace '\$CLAUDE_PROJECT_DIR/scripts/hooks', '$HOME/.claude/hooks'
+            Set-Content -Path $refPath -Value $refContent -Encoding UTF8
+        }
+        Ok "Saved reference: settings.memoryforge.json"
     }
 } else {
     Copy-Item "$ScriptDir\.claude\settings.json" $settingsPath
-    Write-Host "  Created .claude\settings.json with hook configuration" -ForegroundColor Green
+    if ($Global) {
+        $content = Get-Content $settingsPath -Raw
+        $content = $content -replace '\$CLAUDE_PROJECT_DIR/scripts/hooks', '$HOME/.claude/hooks'
+        Set-Content -Path $settingsPath -Value $content -Encoding UTF8
+    }
+    Ok "Created .claude\settings.json"
 }
 
-# --- 3. Create .mind/ directory with templates ---
-Write-Host "[3/5] Creating .mind\ directory..." -ForegroundColor Yellow
-$mindDir = Join-Path $TargetDir ".mind"
-$checkpointDir = Join-Path $mindDir "checkpoints"
-New-Item -ItemType Directory -Force -Path $checkpointDir | Out-Null
+# =============================================================================
+# STEP 3: .mind/ state files
+# =============================================================================
+Step "Creating .mind\ state files..."
 
-foreach ($file in @("STATE.md", "DECISIONS.md", "PROGRESS.md", "SESSION-LOG.md")) {
-    $dest = Join-Path $mindDir $file
-    if (Test-Path $dest) {
-        Write-Host "  .mind\$file already exists (skipped)" -ForegroundColor Green
-    } else {
-        Copy-Item (Join-Path $ScriptDir "templates\.mind\$file") $dest
-        Write-Host "  Created .mind\$file" -ForegroundColor Green
+if ($Global) {
+    Ok "Skipped - .mind/ is always per-project."
+    Ok "Run the installer on individual projects to create .mind/ files."
+} else {
+    $mindDir = Join-Path $TargetDir ".mind"
+    New-Item -ItemType Directory -Force -Path (Join-Path $mindDir "checkpoints") | Out-Null
+
+    foreach ($file in @("STATE.md", "DECISIONS.md", "PROGRESS.md", "SESSION-LOG.md")) {
+        $dest = Join-Path $mindDir $file
+        if (Test-Path $dest) {
+            Skip ".mind\$file"
+        } else {
+            Copy-Item (Join-Path $ScriptDir "templates\.mind\$file") $dest
+            Ok "Created .mind\$file"
+        }
     }
 }
 
-# --- 4. Install Mind agent ---
-Write-Host "[4/5] Installing Mind agent..." -ForegroundColor Yellow
-$agentsDir = Join-Path $claudeDir "agents"
+# =============================================================================
+# STEP 4: Mind agent
+# =============================================================================
+Step "Installing Mind agent..."
+$agentsDir = Join-Path $ClaudeDir "agents"
 New-Item -ItemType Directory -Force -Path $agentsDir | Out-Null
 
 $mindAgent = Join-Path $agentsDir "mind.md"
 if (Test-Path $mindAgent) {
-    Write-Host "  .claude\agents\mind.md already exists (skipped)" -ForegroundColor Green
+    Skip ".claude\agents\mind.md"
 } else {
     Copy-Item "$ScriptDir\.claude\agents\mind.md" $mindAgent
-    Write-Host "  Created .claude\agents\mind.md" -ForegroundColor Green
+    Ok "Created .claude\agents\mind.md"
 }
 
-# --- 5. Update .gitignore ---
-Write-Host "[5/5] Updating .gitignore..." -ForegroundColor Yellow
+# =============================================================================
+# STEP 5: .gitignore
+# =============================================================================
+Step "Updating .gitignore..."
 
-$gitignoreEntries = @(
-    "",
-    "# MemoryForge auto-generated tracking files",
-    ".mind/.last-activity",
-    ".mind/.agent-activity",
-    ".mind/.task-completions",
-    ".mind/.session-tracking",
-    ".mind/checkpoints/"
-)
-
-$gitignorePath = Join-Path $TargetDir ".gitignore"
-if (Test-Path $gitignorePath) {
-    $content = Get-Content $gitignorePath -Raw
-    if ($content -match "MemoryForge") {
-        Write-Host "  .gitignore already has MemoryForge entries (skipped)" -ForegroundColor Green
-    } else {
-        $gitignoreEntries | Out-File -Append -Encoding utf8 $gitignorePath
-        Write-Host "  Updated .gitignore with MemoryForge entries" -ForegroundColor Green
-    }
+if ($Global) {
+    Ok "Skipped - .gitignore is per-project."
+    Ok "Add to your projects: .mind/.last-activity, .mind/.agent-activity,"
+    Ok ".mind/.task-completions, .mind/.session-tracking, .mind/checkpoints/"
 } else {
-    $gitignoreEntries | Out-File -Encoding utf8 $gitignorePath
-    Write-Host "  Created .gitignore with MemoryForge entries" -ForegroundColor Green
+    $gitignorePath = Join-Path $TargetDir ".gitignore"
+    $entries = @(
+        "",
+        "# MemoryForge auto-generated tracking files",
+        ".mind/.last-activity",
+        ".mind/.agent-activity",
+        ".mind/.task-completions",
+        ".mind/.session-tracking",
+        ".mind/checkpoints/"
+    )
+
+    if ((Test-Path $gitignorePath) -and ((Get-Content $gitignorePath -Raw) -match "MemoryForge")) {
+        Skip ".gitignore already has MemoryForge entries"
+    } else {
+        $entries | Out-File -Append -Encoding utf8 $gitignorePath
+        Ok "Updated .gitignore"
+    }
 }
 
+# =============================================================================
+# EXTENSIONS
+# =============================================================================
+
+if ($WithTeam) {
+    Step "Installing Team Memory extension..."
+    New-Item -ItemType Directory -Force -Path $agentsDir | Out-Null
+
+    foreach ($agent in @("orchestrator.md", "builder.md")) {
+        $dest = Join-Path $agentsDir $agent
+        if (Test-Path $dest) {
+            Skip ".claude\agents\$agent"
+        } else {
+            Copy-Item (Join-Path $ScriptDir "extensions\team-memory\agents\$agent") $dest
+            Ok "Created .claude\agents\$agent"
+        }
+    }
+}
+
+if ($WithVector) {
+    Step "Installing Vector Memory extension..."
+    if ($Global) {
+        $vectorDir = Join-Path $env:USERPROFILE ".claude\extensions\vector-memory"
+    } else {
+        $vectorDir = Join-Path $TargetDir "extensions\vector-memory"
+    }
+    New-Item -ItemType Directory -Force -Path $vectorDir | Out-Null
+    Copy-Item "$ScriptDir\extensions\vector-memory\README.md" "$vectorDir\README.md" -Force
+    Ok "Installed vector-memory extension"
+    Ok "See $vectorDir\README.md for setup"
+}
+
+if ($WithGraph) {
+    Step "Installing Graph Memory extension..."
+    if ($Global) {
+        $graphDir = Join-Path $env:USERPROFILE ".claude\extensions\graph-memory"
+    } else {
+        $graphDir = Join-Path $TargetDir "extensions\graph-memory"
+    }
+    New-Item -ItemType Directory -Force -Path $graphDir | Out-Null
+    Copy-Item "$ScriptDir\extensions\graph-memory\README.md" "$graphDir\README.md" -Force
+    Copy-Item "$ScriptDir\extensions\graph-memory\docker-compose.yml" "$graphDir\docker-compose.yml" -Force
+    Ok "Installed graph-memory extension"
+    Ok "Run 'docker compose up -d' in $graphDir to start Neo4j"
+}
+
+# =============================================================================
+# Summary
+# =============================================================================
 Write-Host ""
-Write-Host "=== MemoryForge installed successfully! ===" -ForegroundColor Green
+Write-Host "  Installation complete." -ForegroundColor Green
 Write-Host ""
-Write-Host "Next steps:"
-Write-Host "  1. Add the Mind Protocol section to your CLAUDE.md"
-Write-Host "     (see templates\CLAUDE.md.template for reference)"
-Write-Host "  2. Edit .mind\STATE.md with your project's current state"
-Write-Host "  3. Start Claude Code in your project directory"
-Write-Host "  4. The session-start hook will inject your .mind\ state automatically"
+Write-Host "  Installed:" -ForegroundColor White
+Write-Host "    + 8 hook scripts" -ForegroundColor Green
+Write-Host "    + .claude\settings.json" -ForegroundColor Green
+Write-Host "    + Mind agent" -ForegroundColor Green
+if (-not $Global) {
+    Write-Host "    + .mind\ state files (4 templates)" -ForegroundColor Green
+    Write-Host "    + .gitignore entries" -ForegroundColor Green
+}
+if ($WithTeam)   { Write-Host "    + Team agents (orchestrator + builder)" -ForegroundColor Green }
+if ($WithVector) { Write-Host "    + Vector memory extension" -ForegroundColor Green }
+if ($WithGraph)  { Write-Host "    + Graph memory extension (Neo4j)" -ForegroundColor Green }
+
 Write-Host ""
-Write-Host "Files installed:"
-Write-Host "  scripts\hooks\*.sh        - 8 hook scripts"
-Write-Host "  .claude\settings.json     - Hook configuration"
-Write-Host "  .claude\agents\mind.md    - Mind agent definition"
-Write-Host "  .mind\*.md                - State tracking files"
+Write-Host "  Next steps:" -ForegroundColor White
+Write-Host "    1. Add the Mind Protocol to your CLAUDE.md"
+Write-Host "       See templates\CLAUDE.md.template" -ForegroundColor DarkGray
+if (-not $Global) {
+    Write-Host "    2. Edit .mind\STATE.md with your project's current state"
+    Write-Host "    3. Run 'claude' - the session-start hook fires automatically"
+} else {
+    Write-Host "    2. Run 'claude' in any project - hooks fire automatically"
+    Write-Host "    3. Create .mind/ per-project: .\install.ps1 -TargetDir C:\project"
+}
 Write-Host ""
-Write-Host "Tip: Commit .mind\STATE.md, PROGRESS.md, DECISIONS.md, and SESSION-LOG.md" -ForegroundColor Blue
-Write-Host "to version control. The auto-generated tracking files are gitignored." -ForegroundColor Blue
+Write-Host "  Docs: https://github.com/marolinik/MemoryForge" -ForegroundColor DarkGray
+Write-Host ""
