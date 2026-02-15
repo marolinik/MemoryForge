@@ -282,7 +282,7 @@ if [ "$UNINSTALL" = true ]; then
 
   # 5. Remove tracking files (NOT state files — those are user data)
   if [ "$GLOBAL" != true ]; then
-    TRACKING_FILES=".mind/.last-activity .mind/.agent-activity .mind/.task-completions .mind/.session-tracking"
+    TRACKING_FILES=".mind/.last-activity .mind/.agent-activity .mind/.task-completions .mind/.session-tracking .mind/.file-tracker"
     for tf in $TRACKING_FILES; do
       TF_PATH="$TARGET_DIR/$tf"
       if [ -f "$TF_PATH" ]; then
@@ -604,6 +604,7 @@ else
     ".mind/.agent-activity"
     ".mind/.task-completions"
     ".mind/.session-tracking"
+    ".mind/.file-tracker"
     ".mind/checkpoints/"
   )
 

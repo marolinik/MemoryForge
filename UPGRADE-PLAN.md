@@ -48,8 +48,9 @@ Enhance `session-end.sh`:
 - Append to SESSION-LOG.md if it wasn't updated this session
 
 Files to MODIFY:
-- [ ] scripts/hooks/stop-checkpoint.sh — file change tracking
-- [ ] scripts/hooks/session-end.sh — auto session summary
+- [x] scripts/hooks/stop-checkpoint.sh — file change tracking via git
+- [x] scripts/hooks/session-end.sh — auto session summary from .file-tracker
+- [x] install.sh / install.ps1 — .gitignore + uninstall include .file-tracker
 
 ---
 

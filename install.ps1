@@ -230,7 +230,8 @@ else { fs.writeFileSync('$($mcpJsonPath -replace '\\','/')', JSON.stringify(mcp,
     # 5. Remove tracking files (NOT state files - those are user data)
     if (-not $Global) {
         $trackingFiles = @(".mind\.last-activity", ".mind\.agent-activity",
-                          ".mind\.task-completions", ".mind\.session-tracking")
+                          ".mind\.task-completions", ".mind\.session-tracking",
+                          ".mind\.file-tracker")
         foreach ($tf in $trackingFiles) {
             $tfPath = Join-Path $TargetDir $tf
             if (Test-Path $tfPath) {
@@ -551,6 +552,7 @@ if ($Global) {
         ".mind/.agent-activity",
         ".mind/.task-completions",
         ".mind/.session-tracking",
+        ".mind/.file-tracker",
         ".mind/checkpoints/"
     )
 
