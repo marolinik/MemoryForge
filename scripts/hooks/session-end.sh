@@ -61,7 +61,7 @@ if [ "$SESSION_LOG_STALE" = true ] && [ -f "$TRACKER" ]; then
 
     # Determine next session number
     if [ -f "$SESSION_LOG" ]; then
-      LAST_NUM=$(grep -oP 'Session \K[0-9]+' "$SESSION_LOG" 2>/dev/null | tail -1 || echo "0")
+      LAST_NUM=$(awk '/^## Session [0-9]+/{n=$3} END{print n+0}' "$SESSION_LOG" 2>/dev/null || echo "0")
     else
       LAST_NUM=0
     fi

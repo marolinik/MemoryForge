@@ -13,14 +13,18 @@
 //   memory_save_progress  — Add or check off tasks in PROGRESS.md
 //   memory_save_session   — Append a session summary to SESSION-LOG.md
 //
-// Usage: Configured as MCP server in .claude/settings.json
-//   "mcpServers": { "memory": { "command": "node", "args": ["scripts/mcp-memory-server.js"] } }
+// Usage: Configured as MCP server in .mcp.json
+//   { "mcpServers": { "memory": { "command": "node", "args": ["scripts/mcp-memory-server.js"] } } }
 //
 // Zero dependencies. Pure Node.js.
 // =============================================================================
 
 const fs = require('fs');
 const path = require('path');
+
+// --- Constants ---
+
+const MAX_INPUT_SIZE = 50 * 1024; // 50KB limit per tool call
 
 // --- Find .mind/ directory ---
 
@@ -146,48 +150,83 @@ function memoryUpdateState(args) {
   const existing = readMindFile('STATE.md') || '';
   const now = new Date().toISOString().split('T')[0];
 
-  // Build new STATE.md from args, preserving any sections not being updated
-  const sections = {
-    phase: args.phase || extractSection(existing, 'Current Phase') || 'Not set',
-    status: args.status || extractSection(existing, 'Current Status') || 'Not set',
-    activeWork: args.active_work || extractList(existing, 'Active Work'),
-    blockers: args.blockers || extractList(existing, 'Blocked Items'),
-    nextAction: args.next_action || extractSection(existing, 'Next Action') || 'Not set'
-  };
-
-  let content = '# Project State\n\n';
-  content += `## Current Phase\n${sections.phase}\n\n`;
-  content += `## Current Status\n${sections.status}\n\n`;
-
-  content += '## Active Work\n';
-  if (Array.isArray(sections.activeWork) && sections.activeWork.length > 0) {
-    for (const item of sections.activeWork) {
-      content += `- ${item}\n`;
-    }
-  } else if (typeof sections.activeWork === 'string') {
-    content += `${sections.activeWork}\n`;
-  } else {
-    content += 'None\n';
+  // Build updates map — only for fields the caller provided
+  const updates = {};
+  if (args.phase !== undefined) updates['Current Phase'] = args.phase;
+  if (args.status !== undefined) updates['Current Status'] = args.status;
+  if (args.active_work !== undefined) {
+    updates['Active Work'] = Array.isArray(args.active_work)
+      ? args.active_work.map(i => `- ${i}`).join('\n')
+      : String(args.active_work);
   }
-  content += '\n';
-
-  content += '## Blocked Items\n';
-  if (Array.isArray(sections.blockers) && sections.blockers.length > 0) {
-    for (const item of sections.blockers) {
-      content += `- ${item}\n`;
-    }
-  } else if (typeof sections.blockers === 'string') {
-    content += `${sections.blockers}\n`;
-  } else {
-    content += 'None\n';
+  if (args.blockers !== undefined) {
+    updates['Blocked Items'] = Array.isArray(args.blockers)
+      ? args.blockers.map(i => `- ${i}`).join('\n')
+      : String(args.blockers);
   }
-  content += '\n';
+  if (args.next_action !== undefined) updates['Next Action'] = args.next_action;
+  updates['Last Updated'] = now;
 
-  content += `## Next Action\n${sections.nextAction}\n\n`;
-  content += `## Last Updated\n${now}\n`;
+  // If no existing content, build from scratch
+  if (!existing.trim()) {
+    let content = '# Project State\n\n';
+    content += `## Current Phase\n${updates['Current Phase'] || 'Not set'}\n\n`;
+    content += `## Current Status\n${updates['Current Status'] || 'Not set'}\n\n`;
+    content += `## Active Work\n${updates['Active Work'] || 'None'}\n\n`;
+    content += `## Blocked Items\n${updates['Blocked Items'] || 'None'}\n\n`;
+    content += `## Next Action\n${updates['Next Action'] || 'Not set'}\n\n`;
+    content += `## Last Updated\n${now}\n`;
+    writeMindFile('STATE.md', content);
+    const phase = updates['Current Phase'] || 'Not set';
+    return { content: [{ type: 'text', text: `STATE.md created. Phase: ${phase}` }] };
+  }
 
-  writeMindFile('STATE.md', content);
-  return { content: [{ type: 'text', text: `STATE.md updated. Phase: ${sections.phase}` }] };
+  // Parse existing file into ordered sections: [{heading: string|null, body: string}]
+  const parsed = [];
+  const lines = existing.split('\n');
+  let curHeading = null;
+  let curBody = [];
+
+  for (const line of lines) {
+    if (/^## /.test(line)) {
+      parsed.push({ heading: curHeading, body: curBody.join('\n') });
+      curHeading = line.replace(/^## /, '').trim();
+      curBody = [];
+    } else {
+      curBody.push(line);
+    }
+  }
+  parsed.push({ heading: curHeading, body: curBody.join('\n') });
+
+  // Rebuild: update sections that have updates, preserve everything else (including custom sections)
+  const handledHeadings = new Set();
+  const output = [];
+
+  for (const section of parsed) {
+    if (section.heading === null) {
+      // File header (before first ##)
+      output.push(section.body);
+    } else if (section.heading in updates) {
+      // Known section being updated
+      output.push(`## ${section.heading}\n${updates[section.heading]}\n`);
+      handledHeadings.add(section.heading);
+    } else {
+      // Preserve as-is (including custom/unknown sections)
+      output.push(`## ${section.heading}\n${section.body}`);
+    }
+  }
+
+  // Add any updates for sections not found in the existing file
+  for (const [heading, content] of Object.entries(updates)) {
+    if (!handledHeadings.has(heading)) {
+      output.push(`## ${heading}\n${content}\n`);
+    }
+  }
+
+  const result = output.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n';
+  writeMindFile('STATE.md', result);
+  const phase = args.phase || extractSection(existing, 'Current Phase') || 'unchanged';
+  return { content: [{ type: 'text', text: `STATE.md updated. Phase: ${phase}` }] };
 }
 
 function memorySaveDecision(args) {
@@ -225,14 +264,29 @@ function memorySaveProgress(args) {
   const existing = readMindFile('PROGRESS.md') || '# Progress Tracker\n';
 
   if (args.action === 'complete' || args.completed === true) {
-    // Try to find and check the task
-    const pattern = `- [ ] ${args.task}`;
-    if (existing.includes(pattern)) {
+    // Try exact match first
+    const exactPattern = `- [ ] ${args.task}`;
+    if (existing.includes(exactPattern)) {
       const now = new Date().toISOString().split('T')[0];
-      const updated = existing.replace(pattern, `- [x] ${args.task} (${now})`);
+      const updated = existing.replace(exactPattern, `- [x] ${args.task} (completed ${now})`);
       writeMindFile('PROGRESS.md', updated);
       return { content: [{ type: 'text', text: `Marked complete: ${args.task}` }] };
     }
+
+    // Fuzzy match: case-insensitive substring on unchecked tasks
+    const needle = args.task.trim().toLowerCase();
+    const lines = existing.split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      const m = lines[i].match(/^(\s*- )\[ \] (.+)$/);
+      if (m && m[2].toLowerCase().includes(needle)) {
+        const now = new Date().toISOString().split('T')[0];
+        lines[i] = `${m[1]}[x] ${m[2]} (completed ${now})`;
+        writeMindFile('PROGRESS.md', lines.join('\n'));
+        return { content: [{ type: 'text', text: `Marked complete: ${m[2]}` }] };
+      }
+    }
+
+    // Not found — fall through to add action
   }
 
   if (args.action === 'add' || (!args.action && !args.completed)) {
@@ -321,7 +375,7 @@ const TOOLS = [
   },
   {
     name: 'memory_update_state',
-    description: 'Update .mind/STATE.md with the current project phase, status, active work, blockers, and next action. Only provide fields you want to change — others are preserved.',
+    description: 'Update .mind/STATE.md with the current project phase, status, active work, blockers, and next action. Only provide fields you want to change — others are preserved. Custom sections you added manually are also preserved.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -356,11 +410,11 @@ const TOOLS = [
   },
   {
     name: 'memory_save_progress',
-    description: 'Add a task to .mind/PROGRESS.md or mark an existing task as complete.',
+    description: 'Add a task to .mind/PROGRESS.md or mark an existing task as complete. Completion uses fuzzy matching — partial task text will match.',
     inputSchema: {
       type: 'object',
       properties: {
-        task: { type: 'string', description: 'Task description (must match existing text for completion)' },
+        task: { type: 'string', description: 'Task description (exact or partial match for completion)' },
         action: {
           type: 'string', enum: ['add', 'complete'],
           description: '"add" to create a new task, "complete" to check off an existing one'
@@ -406,14 +460,19 @@ const TOOL_HANDLERS = {
   memory_save_session: (args) => memorySaveSession(args)
 };
 
-// --- stdio transport (Content-Length framing) ---
+// --- stdio transport (Content-Length framing with proper Buffer handling) ---
 
-let buffer = '';
+// Use raw Buffers to handle multi-byte characters correctly.
+// Content-Length is in bytes, so string-based slicing would break on non-ASCII.
+let rawBuffer = Buffer.alloc(0);
+const SEPARATOR = Buffer.from('\r\n\r\n');
 
 function send(message) {
   const json = JSON.stringify(message);
-  const header = `Content-Length: ${Buffer.byteLength(json)}\r\n\r\n`;
-  process.stdout.write(header + json);
+  const bodyBytes = Buffer.from(json, 'utf-8');
+  const header = `Content-Length: ${bodyBytes.length}\r\n\r\n`;
+  process.stdout.write(header);
+  process.stdout.write(bodyBytes);
 }
 
 function handleMessage(msg) {
@@ -437,7 +496,7 @@ function handleMessage(msg) {
           },
           serverInfo: {
             name: 'memoryforge',
-            version: '1.0.0'
+            version: '1.1.0'
           }
         }
       });
@@ -462,6 +521,20 @@ function handleMessage(msg) {
           id,
           result: {
             content: [{ type: 'text', text: `Unknown tool: ${toolName}` }],
+            isError: true
+          }
+        });
+        break;
+      }
+
+      // Input size limit — prevent disk/memory exhaustion
+      const inputStr = JSON.stringify(toolArgs);
+      if (inputStr.length > MAX_INPUT_SIZE) {
+        send({
+          jsonrpc: '2.0',
+          id,
+          result: {
+            content: [{ type: 'text', text: `Input too large (${inputStr.length} chars, max ${MAX_INPUT_SIZE}). Reduce input size.` }],
             isError: true
           }
         });
@@ -512,39 +585,38 @@ function handleMessage(msg) {
   }
 }
 
-// Parse Content-Length framed messages from stdin
-process.stdin.setEncoding('utf-8');
+// Parse Content-Length framed messages from stdin using raw Buffers
 process.stdin.on('data', (chunk) => {
-  buffer += chunk;
+  rawBuffer = Buffer.concat([rawBuffer, chunk]);
 
   while (true) {
-    // Look for Content-Length header
-    const headerEnd = buffer.indexOf('\r\n\r\n');
+    // Look for \r\n\r\n separator
+    const headerEnd = rawBuffer.indexOf(SEPARATOR);
     if (headerEnd === -1) break;
 
-    const header = buffer.substring(0, headerEnd);
-    const match = header.match(/Content-Length:\s*(\d+)/i);
+    const headerStr = rawBuffer.subarray(0, headerEnd).toString('utf-8');
+    const match = headerStr.match(/Content-Length:\s*(\d+)/i);
     if (!match) {
-      // Bad header — skip past it
-      buffer = buffer.substring(headerEnd + 4);
+      // Bad header — skip past separator
+      rawBuffer = rawBuffer.subarray(headerEnd + 4);
       continue;
     }
 
     const contentLength = parseInt(match[1]);
     const bodyStart = headerEnd + 4;
-    const bodyEnd = bodyStart + contentLength;
 
     // Not enough data yet
-    if (Buffer.byteLength(buffer.substring(bodyStart), 'utf-8') < contentLength) break;
+    if (rawBuffer.length - bodyStart < contentLength) break;
 
-    const body = buffer.substring(bodyStart, bodyStart + contentLength);
-    buffer = buffer.substring(bodyEnd);
+    // Extract exactly contentLength bytes
+    const bodyBytes = rawBuffer.subarray(bodyStart, bodyStart + contentLength);
+    rawBuffer = rawBuffer.subarray(bodyStart + contentLength);
 
     try {
-      const msg = JSON.parse(body);
+      const msg = JSON.parse(bodyBytes.toString('utf-8'));
       handleMessage(msg);
     } catch (err) {
-      // Ignore malformed JSON
+      logError('JSONParseError', err);
     }
   }
 });

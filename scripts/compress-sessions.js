@@ -35,9 +35,9 @@ const defaults = {
 let userConfig = {};
 try {
   const projectRoot = path.resolve(mindDir, "..");
-  const configPath = path.join(projectRoot, ".memoryforge.config.js");
+  const configPath = path.join(projectRoot, ".memoryforge.config.json");
   if (fs.existsSync(configPath)) {
-    userConfig = require(configPath);
+    userConfig = JSON.parse(fs.readFileSync(configPath, "utf-8"));
   }
 } catch {
   // Config load failed — use defaults silently

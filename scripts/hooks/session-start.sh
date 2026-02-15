@@ -34,9 +34,9 @@ SOURCE=$(echo "$INPUT" | node -e "
 # Check total size of .mind/ markdown files (skip checkpoints, tracking files)
 # Read threshold from config if available, otherwise default to 12KB (~3000 tokens)
 COMPRESS_THRESHOLD=12000
-if [ -f "$PROJECT_DIR/.memoryforge.config.js" ]; then
+if [ -f "$PROJECT_DIR/.memoryforge.config.json" ]; then
   CONFIG_THRESHOLD=$(node -e "
-    try{const c=require('$PROJECT_DIR/.memoryforge.config.js');
+    try{const c=JSON.parse(require('fs').readFileSync('$PROJECT_DIR/.memoryforge.config.json','utf-8'));
     console.log(c.compressThresholdBytes||12000)}catch{console.log(12000)}
   " 2>/dev/null || echo "12000")
   COMPRESS_THRESHOLD="$CONFIG_THRESHOLD"
@@ -80,8 +80,8 @@ const source = process.argv[2];
 let cfg = {};
 try {
   const projectRoot = path.resolve(mindDir, '..');
-  const cfgPath = path.join(projectRoot, '.memoryforge.config.js');
-  if (fs.existsSync(cfgPath)) cfg = require(cfgPath);
+  const cfgPath = path.join(projectRoot, '.memoryforge.config.json');
+  if (fs.existsSync(cfgPath)) cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf-8'));
 } catch {}
 const SESSION_LOG_TAIL = cfg.sessionLogTailLines || 20;
 const RECENT_DECISIONS = cfg.briefingRecentDecisions || 5;

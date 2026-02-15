@@ -211,8 +211,10 @@ For large projects, the session-start hook automatically switches to a compact b
 Copy the config template to your project root to customize thresholds:
 
 ```bash
-cp MemoryForge/templates/memoryforge.config.js.template your-project/.memoryforge.config.js
+cp MemoryForge/templates/memoryforge.config.json.template your-project/.memoryforge.config.json
 ```
+
+> **Note:** Config is pure JSON — no code execution, safe to commit.
 
 All settings have sensible defaults — only override what you need:
 

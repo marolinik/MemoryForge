@@ -1,8 +1,8 @@
 # MemoryForge Upgrade Plan: 6/10 → 9/10
 
-## Current Score: 6/10
-Strengths: zero deps, best-in-class install UX, brownfield safety
-Weaknesses: no MCP tools, no auto-capture, no search, no dashboard
+## Current Score: 7.56/10 (Round 2 benchmark average)
+Strengths: compaction survival loop, zero deps, brownfield safety, MCP tools, progressive briefings
+Weaknesses: keyword-only search, no tests/CI, config security, multi-byte bug, macOS compat
 
 ---
 
@@ -173,5 +173,99 @@ Files to MODIFY:
 
 ---
 
+---
+
+## Wave 10: Bug Fixes + Security Hardening (7.56/10 → 8.0/10)
+**Fix all P1/P2 bugs and security issues found by Round 2 benchmark.**
+
+Fix `scripts/mcp-memory-server.js`:
+- Multi-byte Content-Length bug: use Buffer for parsing, not string substring
+- `memory_update_state` preserve custom sections (merge, don't rebuild)
+- Add input length limits (50KB cap on all string inputs)
+- Switch config from `require()` (code execution) to `JSON.parse(readFileSync())`
+- Fuzzy task completion matching in `memory_save_progress`
+
+Fix `scripts/hooks/session-end.sh`:
+- Replace `grep -oP` with POSIX-compatible alternative for macOS
+
+Files to MODIFY:
+- [x] scripts/mcp-memory-server.js — Buffer-based parsing, section preservation, input limits, fuzzy match
+- [x] scripts/hooks/session-end.sh — POSIX-compatible session number extraction (awk)
+- [x] templates/memoryforge.config.js.template → templates/memoryforge.config.json.template (rename)
+- [x] scripts/compress-sessions.js — JSON config loading
+- [x] scripts/hooks/session-start.sh — JSON config loading
+- [x] scripts/hooks/stop-checkpoint.sh — JSON config loading
+- [x] install.sh — N/A (config is user-copied, not installed by script)
+- [x] install.ps1 — N/A (config is user-copied, not installed by script)
+- [x] README.md — config docs update (.js → .json)
+
+---
+
+## Wave 11: Testing + CI (8.0/10 → 8.3/10)
+**Add test suite and contributor infrastructure.**
+
+Create test suite:
+- Unit tests for MCP server (all 6 tools)
+- Unit tests for compress-sessions.js (archival, rotation, compression)
+- Hook chain integration test (session-start → pre-compact → session-start(compact))
+- GitHub Actions CI (macOS + Linux + Windows)
+
+Create contributor docs:
+- CONTRIBUTING.md (dev setup, test running, PR process)
+- SECURITY.md (reporting vulnerabilities, security design)
+- CHANGELOG.md (retroactive for Waves 1-10)
+
+Files to CREATE:
+- [ ] tests/mcp-server.test.js — MCP tool unit tests
+- [ ] tests/compress.test.js — compression/archival unit tests
+- [ ] tests/hooks.test.js — hook chain integration tests
+- [ ] .github/workflows/ci.yml — GitHub Actions
+- [ ] CONTRIBUTING.md
+- [ ] SECURITY.md
+- [ ] CHANGELOG.md
+
+---
+
+## Wave 12: Semantic Search (8.3/10 → 8.7/10)
+**Vector memory extension for meaning-based search.**
+
+Create `scripts/vector-memory.js`:
+- TF-IDF based semantic search (zero dependencies)
+- Index .mind/ files on session start
+- Hybrid search: keyword results + semantic results
+- `memory_search` upgrade: falls back to keyword when vector unavailable
+
+Files to CREATE:
+- [ ] scripts/vector-memory.js — TF-IDF indexer + search
+- [ ] scripts/extensions/vector-search-server.js — MCP server extension
+
+Files to MODIFY:
+- [ ] scripts/mcp-memory-server.js — hybrid search in memory_search
+- [ ] install.sh / install.ps1 — --with-vector flag wiring
+
+---
+
+## Wave 13: Marketing + Demo (8.7/10 → 9.0/10)
+**Visual proof, landing page, templates.**
+
+Create marketing assets:
+- Demo GIF/terminal recording showing before/after compaction survival
+- GitHub Pages landing site
+- Template .mind/ files for common project types (web app, CLI, library)
+- Cross-project fleet dashboard
+
+Files to CREATE:
+- [ ] docs/demo.gif or docs/demo.svg (terminal recording)
+- [ ] templates/mind-web-app/ — starter .mind/ for web projects
+- [ ] templates/mind-cli/ — starter .mind/ for CLI projects
+- [ ] templates/mind-library/ — starter .mind/ for libraries
+- [ ] scripts/fleet-dashboard.js — multi-project overview
+
+Files to MODIFY:
+- [ ] README.md — embed demo GIF, link templates
+
+---
+
 ## Execution Order
 Wave 1 → Wave 2 → Wave 3 → Wave 4 → Wave 5 → Wave 6 → Wave 7 → Wave 8 → Wave 9 (all complete)
+Wave 10 (in progress) → Wave 11 → Wave 12 → Wave 13

@@ -72,9 +72,9 @@ fi
 
 # Output a minimal context nudge if STATE.md is stale (>30 min by default)
 STALE_SECONDS=1800
-if [ -f "$PROJECT_DIR/.memoryforge.config.js" ]; then
+if [ -f "$PROJECT_DIR/.memoryforge.config.json" ]; then
   STALE_SECONDS=$(node -e "
-    try{const c=require('$PROJECT_DIR/.memoryforge.config.js');
+    try{const c=JSON.parse(require('fs').readFileSync('$PROJECT_DIR/.memoryforge.config.json','utf-8'));
     console.log(c.staleWarningSeconds||1800)}catch{console.log(1800)}
   " 2>/dev/null || echo "1800")
 fi

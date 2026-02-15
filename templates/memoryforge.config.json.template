@@ -1,0 +1,16 @@
+{
+  "_comment": "MemoryForge Configuration — copy to your project root as .memoryforge.config.json",
+
+  "keepSessionsFull": 5,
+  "keepDecisionsFull": 10,
+  "archiveAfterDays": 30,
+  "trackingMaxLines": 100,
+  "compressThresholdBytes": 12000,
+
+  "sessionLogTailLines": 20,
+  "briefingRecentDecisions": 5,
+  "briefingMaxProgressLines": 40,
+
+  "maxCheckpointFiles": 10,
+  "staleWarningSeconds": 1800
+}
