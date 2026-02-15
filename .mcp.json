@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "memory": {
+      "command": "node",
+      "args": ["scripts/mcp-memory-server.js"]
+    }
+  }
+}

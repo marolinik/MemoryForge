@@ -194,7 +194,73 @@ if [ "$UNINSTALL" = true ]; then
     fi
   fi
 
-  # 3. Remove agents
+  # 3. Remove MCP memory server
+  if [ "$GLOBAL" = true ]; then
+    MCP_SERVER="$HOME/.claude/mcp-memory-server.js"
+    if [ -f "$MCP_SERVER" ]; then
+      if [ "$DRY_RUN" = true ]; then
+        dry "Would remove $MCP_SERVER"
+      else
+        rm -f "$MCP_SERVER"
+        ok "Removed ~/.claude/mcp-memory-server.js"
+      fi
+      REMOVED=$((REMOVED + 1))
+    fi
+  else
+    # Remove MCP server script from scripts/
+    MCP_SERVER="$TARGET_DIR/scripts/mcp-memory-server.js"
+    if [ -f "$MCP_SERVER" ]; then
+      if [ "$DRY_RUN" = true ]; then
+        dry "Would remove $MCP_SERVER"
+      else
+        rm -f "$MCP_SERVER"
+        ok "Removed scripts/mcp-memory-server.js"
+      fi
+      REMOVED=$((REMOVED + 1))
+    fi
+
+    # Remove "memory" entry from .mcp.json (smart removal)
+    MCP_JSON="$TARGET_DIR/.mcp.json"
+    if [ -f "$MCP_JSON" ] && grep -q "mcp-memory-server\|memoryforge" "$MCP_JSON" 2>/dev/null; then
+      if [ "$DRY_RUN" = true ]; then
+        dry "Would remove memory server from .mcp.json"
+      else
+        cp "$MCP_JSON" "${MCP_JSON}.backup"
+        node -e "
+          const fs = require('fs');
+          const mcp = JSON.parse(fs.readFileSync('$MCP_JSON', 'utf-8'));
+          if (mcp.mcpServers && mcp.mcpServers.memory) {
+            delete mcp.mcpServers.memory;
+          }
+          if (Object.keys(mcp.mcpServers || {}).length === 0) {
+            fs.unlinkSync('$MCP_JSON');
+          } else {
+            fs.writeFileSync('$MCP_JSON', JSON.stringify(mcp, null, 2) + '\n');
+          }
+        " 2>/dev/null && {
+          if [ -f "$MCP_JSON" ]; then
+            ok "Removed memory server from .mcp.json (other servers preserved)"
+          else
+            ok "Removed .mcp.json (no other servers)"
+          fi
+        } || warn "Could not clean .mcp.json — remove 'memory' entry manually"
+      fi
+      REMOVED=$((REMOVED + 1))
+    fi
+
+    # Remove .mcp.json backup/reference
+    for ref in "${MCP_JSON}.backup" "$TARGET_DIR/.mcp.memoryforge.json"; do
+      if [ -f "$ref" ]; then
+        if [ "$DRY_RUN" = true ]; then
+          dry "Would remove $(basename "$ref")"
+        else
+          rm -f "$ref"
+        fi
+      fi
+    done
+  fi
+
+  # 4. Remove agents
   MF_AGENTS="mind.md orchestrator.md builder.md"
   for agent in $MF_AGENTS; do
     AGENT_PATH="$CLAUDE_DIR/agents/$agent"
@@ -214,7 +280,7 @@ if [ "$UNINSTALL" = true ]; then
     fi
   done
 
-  # 4. Remove tracking files (NOT state files — those are user data)
+  # 5. Remove tracking files (NOT state files — those are user data)
   if [ "$GLOBAL" != true ]; then
     TRACKING_FILES=".mind/.last-activity .mind/.agent-activity .mind/.task-completions .mind/.session-tracking"
     for tf in $TRACKING_FILES; do
@@ -246,7 +312,7 @@ if [ "$UNINSTALL" = true ]; then
     echo -e "    ${DIM}These are your project data. Delete manually if you want them gone.${NC}"
   fi
 
-  # 5. Remove reference config
+  # 6. Remove reference config
   for ref in "$CLAUDE_DIR/settings.memoryforge.json" "$CLAUDE_DIR/settings.json.backup"; do
     if [ -f "$ref" ]; then
       if [ "$DRY_RUN" = true ]; then
@@ -320,11 +386,11 @@ if [ "$GLOBAL" != true ]; then
   fi
 fi
 
-# Calculate total steps (6 base steps for project-level, 5 for global)
+# Calculate total steps (7 base steps for project-level, 6 for global)
 if [ "$GLOBAL" = true ] || [ "$NO_CLAUDE_MD" = true ]; then
-  total_steps=5
-else
   total_steps=6
+else
+  total_steps=7
 fi
 [ "$WITH_TEAM" = true ]   && total_steps=$((total_steps + 1))
 [ "$WITH_VECTOR" = true ] && total_steps=$((total_steps + 1))
@@ -412,7 +478,71 @@ fi
 [ "${MF_SETTINGS_TEMP:-}" ] && rm -f "$MF_SETTINGS_TEMP" 2>/dev/null || true
 
 # =============================================================================
-# STEP 3: .mind/ state files (always project-level)
+# STEP 3: MCP Memory Server (.mcp.json)
+# =============================================================================
+step "Configuring MCP memory server..."
+
+MCP_JSON="$TARGET_DIR/.mcp.json"
+MF_MCP_JSON="$SCRIPT_DIR/.mcp.json"
+
+# For global installs, copy MCP server script to ~/.claude/
+if [ "$GLOBAL" = true ]; then
+  MCP_SERVER_DEST="$HOME/.claude/mcp-memory-server.js"
+  if [ "$DRY_RUN" = true ]; then
+    dry "Would copy MCP server to $MCP_SERVER_DEST"
+  else
+    cp "$SCRIPT_DIR/scripts/mcp-memory-server.js" "$MCP_SERVER_DEST"
+    ok "Copied MCP server to ~/.claude/"
+  fi
+  ok "Note: Add to each project's .mcp.json:"
+  ok '  {"mcpServers":{"memory":{"command":"node","args":["~/.claude/mcp-memory-server.js"]}}}'
+elif [ -f "$MCP_JSON" ]; then
+  if grep -q "mcp-memory-server\|memoryforge" "$MCP_JSON" 2>/dev/null; then
+    skip ".mcp.json already has MemoryForge memory server"
+  else
+    # Smart merge: add our server to existing .mcp.json
+    if [ "$DRY_RUN" = true ]; then
+      dry "Would add memory server to existing .mcp.json"
+    else
+      # Backup
+      cp "$MCP_JSON" "${MCP_JSON}.backup"
+      # Use node to merge
+      node -e "
+        const fs = require('fs');
+        const existing = JSON.parse(fs.readFileSync('$MCP_JSON', 'utf-8'));
+        const mf = JSON.parse(fs.readFileSync('$MF_MCP_JSON', 'utf-8'));
+        existing.mcpServers = existing.mcpServers || {};
+        Object.assign(existing.mcpServers, mf.mcpServers);
+        fs.writeFileSync('$MCP_JSON', JSON.stringify(existing, null, 2) + '\n');
+      " 2>/dev/null && ok "Added memory server to existing .mcp.json" || {
+        warn "Could not merge .mcp.json — saving reference copy"
+        cp "$MF_MCP_JSON" "${TARGET_DIR}/.mcp.memoryforge.json"
+      }
+    fi
+  fi
+else
+  if [ "$DRY_RUN" = true ]; then
+    dry "Would create .mcp.json with memory server"
+  else
+    cp "$MF_MCP_JSON" "$MCP_JSON"
+    ok "Created .mcp.json with MCP memory server"
+  fi
+fi
+
+# Copy MCP server script to project
+if [ "$GLOBAL" != true ]; then
+  MCP_SERVER_DEST="$TARGET_DIR/scripts/mcp-memory-server.js"
+  if [ "$DRY_RUN" = true ]; then
+    dry "Would copy mcp-memory-server.js to scripts/"
+  else
+    mkdir -p "$TARGET_DIR/scripts"
+    cp "$SCRIPT_DIR/scripts/mcp-memory-server.js" "$MCP_SERVER_DEST"
+    ok "Copied MCP memory server to scripts/"
+  fi
+fi
+
+# =============================================================================
+# STEP 4: .mind/ state files (always project-level)
 # =============================================================================
 step "Creating .mind/ state files..."
 
@@ -442,7 +572,7 @@ else
 fi
 
 # =============================================================================
-# STEP 4: Mind agent
+# STEP 5: Mind agent
 # =============================================================================
 step "Installing Mind agent..."
 
@@ -460,7 +590,7 @@ else
 fi
 
 # =============================================================================
-# STEP 5: .gitignore (project-level only)
+# STEP 6: .gitignore (project-level only)
 # =============================================================================
 step "Updating .gitignore..."
 
@@ -493,7 +623,7 @@ else
 fi
 
 # =============================================================================
-# STEP 6: CLAUDE.md — Mind Protocol (default for project-level)
+# STEP 7: CLAUDE.md — Mind Protocol (default for project-level)
 # =============================================================================
 if [ "$GLOBAL" != true ] && [ "$NO_CLAUDE_MD" != true ]; then
   step "Adding Mind Protocol to CLAUDE.md..."
@@ -601,6 +731,7 @@ echo ""
 echo -e "  ${BOLD}Installed:${NC}"
 echo -e "    ${GREEN}+${NC} 8 hook scripts"
 echo -e "    ${GREEN}+${NC} .claude/settings.json ${DIM}(smart-merged if existing)${NC}"
+echo -e "    ${GREEN}+${NC} MCP memory server ${DIM}(6 tools for querying/updating .mind/)${NC}"
 echo -e "    ${GREEN}+${NC} Mind agent"
 if [ "$GLOBAL" != true ]; then
   echo -e "    ${GREEN}+${NC} .mind/ state files (4 templates)"

@@ -234,6 +234,7 @@ bash install.sh /path/to/project --uninstall --dry-run
 What gets removed:
 - Hook scripts (8 files)
 - MemoryForge entries from `settings.json` (other hooks preserved)
+- MCP memory server (`scripts/mcp-memory-server.js`) and `memory` entry from `.mcp.json` (other MCP servers preserved)
 - MemoryForge agents (only if they contain MF signatures)
 - Tracking files (`.last-activity`, `.agent-activity`, etc.)
 - Checkpoint directory
@@ -288,11 +289,13 @@ Task(subagent_type: "mind", prompt: "Update .mind/ with what we did this session
 ```
 your-project/
 ├── CLAUDE.md                  # Mind Protocol section (appended or created)
+├── .mcp.json                  # MCP memory server configuration
 ├── .claude/
 │   ├── settings.json          # Hook configuration (8 hooks wired)
 │   └── agents/
 │       └── mind.md            # Mind agent (state keeper)
 ├── scripts/
+│   ├── mcp-memory-server.js   # MCP server (6 tools for .mind/ access)
 │   └── hooks/
 │       ├── session-start.sh       # [CRITICAL] Morning briefing
 │       ├── pre-compact.sh         # [CRITICAL] Checkpoint before compaction
@@ -308,6 +311,33 @@ your-project/
     ├── DECISIONS.md            # Decision log with rationale
     ├── SESSION-LOG.md          # Session history
     └── checkpoints/            # Auto-managed compaction snapshots
+```
+
+### MCP Memory Tools
+
+The MCP memory server gives Claude **6 tools** for querying and updating `.mind/` files mid-conversation — no manual file edits needed.
+
+| Tool | What It Does | Example |
+|:---|:---|:---|
+| `memory_status` | Read current state from STATE.md | "Where are we?" |
+| `memory_search` | Search all `.mind/` files by keyword | "What did we decide about auth?" |
+| `memory_update_state` | Rewrite sections of STATE.md | Update phase, status, blockers |
+| `memory_save_decision` | Append a decision to DECISIONS.md | Auto-numbered (DEC-001, DEC-002, ...) |
+| `memory_save_progress` | Add or complete tasks in PROGRESS.md | Mark checkboxes, add new items |
+| `memory_save_session` | Append a session summary to SESSION-LOG.md | Auto-numbered session entries |
+
+The MCP server is **zero dependencies** — pure Node.js, no npm packages. It communicates with Claude via the standard MCP stdio protocol.
+
+Claude can use these tools naturally:
+
+```
+Claude: "Let me check our current state..."
+→ calls memory_status
+→ "We're in Phase 3, the auth middleware is next."
+
+Claude: "I'll record that we chose JWT over sessions."
+→ calls memory_save_decision { title: "Use JWT for auth", decision: "JWT over sessions", rationale: "Stateless, scales better" }
+→ "Decision DEC-005 saved."
 ```
 
 ---
@@ -446,6 +476,7 @@ Most memory tools store facts in a flat file or database. MemoryForge is a **str
 |:---|:---|
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | How the memory loop works, layer model, state file design |
 | [`docs/HOOKS-REFERENCE.md`](docs/HOOKS-REFERENCE.md) | Detailed reference for all 8 hooks |
+| [`docs/MCP-TOOLS.md`](docs/MCP-TOOLS.md) | MCP memory server: 6 tools for querying/updating `.mind/` |
 | [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) | Common issues and fixes |
 | [`docs/TEAM-EXTENSION.md`](docs/TEAM-EXTENSION.md) | Multi-agent team coordination guide |
 | [`templates/CLAUDE.md.template`](templates/CLAUDE.md.template) | Mind Protocol section to add to your CLAUDE.md |

@@ -142,7 +142,72 @@ if ($Uninstall) {
         }
     }
 
-    # 3. Remove agents (only if they contain MemoryForge signatures)
+    # 3. Remove MCP memory server
+    if ($Global) {
+        $mcpServer = Join-Path $env:USERPROFILE ".claude\mcp-memory-server.js"
+        if (Test-Path $mcpServer) {
+            if ($DryRun) {
+                Dry "Would remove $mcpServer"
+            } else {
+                Remove-Item $mcpServer -Force
+                Ok "Removed ~/.claude/mcp-memory-server.js"
+            }
+            $Removed++
+        }
+    } else {
+        # Remove MCP server script from scripts/
+        $mcpServer = Join-Path $TargetDir "scripts\mcp-memory-server.js"
+        if (Test-Path $mcpServer) {
+            if ($DryRun) {
+                Dry "Would remove $mcpServer"
+            } else {
+                Remove-Item $mcpServer -Force
+                Ok "Removed scripts\mcp-memory-server.js"
+            }
+            $Removed++
+        }
+
+        # Remove "memory" entry from .mcp.json (smart removal)
+        $mcpJsonPath = Join-Path $TargetDir ".mcp.json"
+        if ((Test-Path $mcpJsonPath) -and ((Get-Content $mcpJsonPath -Raw) -match "mcp-memory-server|memoryforge")) {
+            if ($DryRun) {
+                Dry "Would remove memory server from .mcp.json"
+            } else {
+                Copy-Item $mcpJsonPath "${mcpJsonPath}.backup" -Force
+                try {
+                    $cleanScript = @"
+const fs = require('fs');
+const mcp = JSON.parse(fs.readFileSync('$($mcpJsonPath -replace '\\','/')', 'utf-8'));
+if (mcp.mcpServers && mcp.mcpServers.memory) { delete mcp.mcpServers.memory; }
+if (Object.keys(mcp.mcpServers || {}).length === 0) { fs.unlinkSync('$($mcpJsonPath -replace '\\','/')'); }
+else { fs.writeFileSync('$($mcpJsonPath -replace '\\','/')', JSON.stringify(mcp, null, 2) + '\n'); }
+"@
+                    $cleanScript | & node -e "process.stdin.resume(); let d=''; process.stdin.on('data',c=>d+=c); process.stdin.on('end',()=>eval(d));" 2>$null
+                    if (Test-Path $mcpJsonPath) {
+                        Ok "Removed memory server from .mcp.json (other servers preserved)"
+                    } else {
+                        Ok "Removed .mcp.json (no other servers)"
+                    }
+                } catch {
+                    Warn "Could not clean .mcp.json - remove 'memory' entry manually"
+                }
+            }
+            $Removed++
+        }
+
+        # Remove .mcp.json backup/reference
+        foreach ($ref in @("${mcpJsonPath}.backup", (Join-Path $TargetDir ".mcp.memoryforge.json"))) {
+            if (Test-Path $ref) {
+                if ($DryRun) {
+                    Dry "Would remove $(Split-Path -Leaf $ref)"
+                } else {
+                    Remove-Item $ref -Force
+                }
+            }
+        }
+    }
+
+    # 4. Remove agents (only if they contain MemoryForge signatures)
     $MfAgents = @("mind.md", "orchestrator.md", "builder.md")
     foreach ($agent in $MfAgents) {
         $agentPath = Join-Path $ClaudeDir "agents\$agent"
@@ -162,7 +227,7 @@ if ($Uninstall) {
         }
     }
 
-    # 4. Remove tracking files (NOT state files - those are user data)
+    # 5. Remove tracking files (NOT state files - those are user data)
     if (-not $Global) {
         $trackingFiles = @(".mind\.last-activity", ".mind\.agent-activity",
                           ".mind\.task-completions", ".mind\.session-tracking")
@@ -196,7 +261,7 @@ if ($Uninstall) {
         Write-Host "    These are your project data. Delete manually if you want them gone." -ForegroundColor DarkGray
     }
 
-    # 5. Remove reference/backup configs
+    # 6. Remove reference/backup configs
     foreach ($ref in @("settings.memoryforge.json", "settings.json.backup")) {
         $refPath = Join-Path $ClaudeDir $ref
         if (Test-Path $refPath) {
@@ -259,8 +324,8 @@ if (-not $Global) {
 }
 
 # Calculate total steps
-# Base: 5 steps + CLAUDE.md (step 6) for project-level installs (unless --no-claude-md)
-$totalSteps = 5 + $extNames.Count
+# Base: 6 steps + CLAUDE.md (step 7) for project-level installs (unless --no-claude-md)
+$totalSteps = 6 + $extNames.Count
 if (-not $Global -and -not $NoClaudeMd) { $totalSteps++ }
 
 # =============================================================================
@@ -352,7 +417,70 @@ if ($mfSettingsTemp -and (Test-Path $mfSettingsTemp)) {
 }
 
 # =============================================================================
-# STEP 3: .mind/ state files
+# STEP 3: MCP Memory Server (.mcp.json)
+# =============================================================================
+Step "Configuring MCP memory server..."
+
+$mcpJson = Join-Path $TargetDir ".mcp.json"
+$mfMcpJson = Join-Path $ScriptDir ".mcp.json"
+
+if ($Global) {
+    $mcpServerDest = Join-Path $env:USERPROFILE ".claude\mcp-memory-server.js"
+    if ($DryRun) {
+        Dry "Would copy MCP server to $mcpServerDest"
+    } else {
+        Copy-Item "$ScriptDir\scripts\mcp-memory-server.js" $mcpServerDest -Force
+        Ok "Copied MCP server to ~/.claude/"
+    }
+    Ok "Note: Add to each project's .mcp.json:"
+    Ok '  {"mcpServers":{"memory":{"command":"node","args":["~/.claude/mcp-memory-server.js"]}}}'
+} elseif ((Test-Path $mcpJson) -and ((Get-Content $mcpJson -Raw) -match "mcp-memory-server|memoryforge")) {
+    Skip ".mcp.json already has MemoryForge memory server"
+} elseif (Test-Path $mcpJson) {
+    # Smart merge: add our server to existing .mcp.json
+    if ($DryRun) {
+        Dry "Would add memory server to existing .mcp.json"
+    } else {
+        Copy-Item $mcpJson "${mcpJson}.backup" -Force
+        try {
+            $mergeScript = @"
+const fs = require('fs');
+const existing = JSON.parse(fs.readFileSync('$($mcpJson -replace '\\','/')', 'utf-8'));
+const mf = JSON.parse(fs.readFileSync('$($mfMcpJson -replace '\\','/')', 'utf-8'));
+existing.mcpServers = existing.mcpServers || {};
+Object.assign(existing.mcpServers, mf.mcpServers);
+fs.writeFileSync('$($mcpJson -replace '\\','/')', JSON.stringify(existing, null, 2) + '\n');
+"@
+            $mergeScript | & node -e "process.stdin.resume(); let d=''; process.stdin.on('data',c=>d+=c); process.stdin.on('end',()=>eval(d));" 2>$null
+            Ok "Added memory server to existing .mcp.json"
+        } catch {
+            Warn "Could not merge .mcp.json — saving reference copy"
+            Copy-Item $mfMcpJson (Join-Path $TargetDir ".mcp.memoryforge.json")
+        }
+    }
+} else {
+    if ($DryRun) {
+        Dry "Would create .mcp.json with memory server"
+    } else {
+        Copy-Item $mfMcpJson $mcpJson
+        Ok "Created .mcp.json with MCP memory server"
+    }
+}
+
+# Copy MCP server script to project
+if (-not $Global) {
+    $mcpServerDest = Join-Path $TargetDir "scripts\mcp-memory-server.js"
+    if ($DryRun) {
+        Dry "Would copy mcp-memory-server.js to scripts\"
+    } else {
+        New-Item -ItemType Directory -Force -Path (Join-Path $TargetDir "scripts") | Out-Null
+        Copy-Item "$ScriptDir\scripts\mcp-memory-server.js" $mcpServerDest -Force
+        Ok "Copied MCP memory server to scripts\"
+    }
+}
+
+# =============================================================================
+# STEP 4: .mind/ state files
 # =============================================================================
 Step "Creating .mind\ state files..."
 
@@ -387,7 +515,7 @@ if ($Global) {
 }
 
 # =============================================================================
-# STEP 4: Mind agent
+# STEP 5: Mind agent
 # =============================================================================
 Step "Installing Mind agent..."
 $agentsDir = Join-Path $ClaudeDir "agents"
@@ -406,7 +534,7 @@ if (Test-Path $mindAgent) {
 }
 
 # =============================================================================
-# STEP 5: .gitignore
+# STEP 6: .gitignore
 # =============================================================================
 Step "Updating .gitignore..."
 
@@ -498,7 +626,7 @@ if ($WithGraph) {
 }
 
 # =============================================================================
-# STEP 6: CLAUDE.md — Mind Protocol (default for project-level installs)
+# STEP 7: CLAUDE.md — Mind Protocol (default for project-level installs)
 # =============================================================================
 if (-not $Global -and -not $NoClaudeMd) {
     Step "Adding Mind Protocol to CLAUDE.md..."
@@ -545,6 +673,7 @@ Write-Host ""
 Write-Host "  Installed:" -ForegroundColor White
 Write-Host "    + 8 hook scripts" -ForegroundColor Green
 Write-Host "    + .claude\settings.json (smart-merged if existing)" -ForegroundColor Green
+Write-Host "    + MCP memory server (6 tools for querying/updating .mind/)" -ForegroundColor Green
 Write-Host "    + Mind agent" -ForegroundColor Green
 if (-not $Global) {
     Write-Host "    + .mind\ state files (4 templates)" -ForegroundColor Green
