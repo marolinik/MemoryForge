@@ -30,6 +30,36 @@ SOURCE=$(echo "$INPUT" | node -e "
   process.stdin.on('end',()=>{try{console.log(JSON.parse(d).source||'startup')}catch{console.log('startup')}})
 " 2>/dev/null || echo "startup")
 
+# --- Auto-compress if .mind/ files are large (Wave 3) ---
+# Check total size of .mind/ markdown files (skip checkpoints, tracking files)
+COMPRESS_THRESHOLD=12000  # ~3000 tokens at 4 chars/token
+if [ -d "$MIND_DIR" ]; then
+  TOTAL_SIZE=0
+  for md_file in "$MIND_DIR/STATE.md" "$MIND_DIR/PROGRESS.md" "$MIND_DIR/DECISIONS.md" "$MIND_DIR/SESSION-LOG.md"; do
+    if [ -f "$md_file" ]; then
+      FILE_SIZE=$(wc -c < "$md_file" 2>/dev/null || echo "0")
+      TOTAL_SIZE=$((TOTAL_SIZE + FILE_SIZE))
+    fi
+  done
+
+  if [ "$TOTAL_SIZE" -gt "$COMPRESS_THRESHOLD" ]; then
+    # Find compress script relative to hooks dir
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    COMPRESS_SCRIPT=""
+    # Project-level: scripts/hooks/ -> scripts/compress-sessions.js
+    if [ -f "$SCRIPT_DIR/../compress-sessions.js" ]; then
+      COMPRESS_SCRIPT="$SCRIPT_DIR/../compress-sessions.js"
+    # Global: ~/.claude/hooks/ -> check project scripts/
+    elif [ -f "$PROJECT_DIR/scripts/compress-sessions.js" ]; then
+      COMPRESS_SCRIPT="$PROJECT_DIR/scripts/compress-sessions.js"
+    fi
+
+    if [ -n "$COMPRESS_SCRIPT" ]; then
+      node "$COMPRESS_SCRIPT" "$MIND_DIR" >/dev/null 2>&1 || true
+    fi
+  fi
+fi
+
 # --- Let Node.js read files directly (avoids bash argv size limits) ---
 node -e "
 const fs = require('fs');

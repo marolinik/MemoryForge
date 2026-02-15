@@ -69,10 +69,10 @@ Enhance `session-start.sh`:
 - Smart extraction (recent = full, old = summary)
 
 Files to CREATE:
-- [ ] scripts/compress-sessions.js
+- [x] scripts/compress-sessions.js
 
 Files to MODIFY:
-- [ ] scripts/hooks/session-start.sh — auto-compress trigger
+- [x] scripts/hooks/session-start.sh — auto-compress trigger when .mind/ > 12KB
 
 ---
 
