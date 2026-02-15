@@ -2,6 +2,43 @@
 
 All notable changes to MemoryForge are documented here.
 
+## [2.0.0] - 2026-02-16
+
+### Breaking Changes — Lean Rewrite
+
+MemoryForge v2.0 is a **subtraction release**: fewer hooks, fewer config keys, fewer scripts.
+The core value — the compaction survival loop — is unchanged.
+
+**Hooks: 8 → 3**
+- Kept: `session-start.sh`, `pre-compact.sh`, `session-end.sh`
+- Removed: `user-prompt-context.sh`, `stop-checkpoint.sh`, `subagent-start.sh`, `subagent-stop.sh`, `task-completed.sh`
+- `session-end.sh` now absorbs stop-checkpoint functionality (`.last-activity` timestamp, file change tracking)
+
+**Config keys: 10 → 3**
+- Kept: `keepSessionsFull`, `keepDecisionsFull`, `archiveAfterDays`
+- Removed keys are hardcoded to their defaults: `trackingMaxLines=100`, `compressThresholdBytes=12000`, `sessionLogTailLines=20`, `briefingRecentDecisions=5`, `briefingMaxProgressLines=40`, `maxCheckpointFiles=10`, `staleWarningSeconds=1800`
+
+**Deleted scripts:**
+- `scripts/vector-memory.js` — TF-IDF semantic search (keyword search remains in MCP server)
+- `scripts/dashboard.js` — HTML dashboard
+- `scripts/fleet-dashboard.js` — Multi-project overview
+- `scripts/health-check.js` — Diagnostic CLI
+- `scripts/detect-existing.js` — Competitor detection
+- `scripts/merge-settings.js` — Settings merge helper (inlined into installers)
+
+**Deleted features:**
+- Extensions system (`--with-team`, `--with-vector`, `--with-graph`, `--full` flags removed)
+- Project templates (`templates/mind-cli/`, `mind-library/`, `mind-web-app/`)
+- Benchmark documentation
+
+**Installer simplification:**
+- `install.sh`, `install.ps1`, `setup.js` rewritten — fewer flags, inline settings merge
+- Extension selection prompts removed from `setup.js`
+
+**Tests: 4 suites → 3**
+- Removed: `tests/vector-memory.test.js`
+- Remaining: `mcp-server.test.js`, `compress.test.js`, `hooks.test.js`
+
 ## [1.9.0] - 2026-02-15
 
 ### Wave 23: R9 Consensus Fixes & Hardening (17 items)

@@ -2,14 +2,11 @@
 # =============================================================================
 # MemoryForge Installer
 # =============================================================================
-# Persistent memory for Claude Code — hooks + state files + extensions.
+# Persistent memory for Claude Code — hooks + state files.
 #
 # Install modes:
-#   bash install.sh [target-dir]                  # Core (project-level)
-#   bash install.sh [target-dir] --with-team      # Core + Team agents
-#   bash install.sh [target-dir] --full           # Core + all extensions
-#   bash install.sh --global                      # Core (user-level, all projects)
-#   bash install.sh --global --full               # User-level + all extensions
+#   bash install.sh [target-dir]                  # Project-level
+#   bash install.sh --global                      # User-level (all projects)
 #
 # Brownfield features:
 #   bash install.sh [target-dir] --dry-run        # Preview changes only
@@ -21,7 +18,7 @@
 
 set -euo pipefail
 
-MEMORYFORGE_VERSION="1.9.0"
+MEMORYFORGE_VERSION="2.0.0"
 
 # --- Colors ---
 RED='\033[0;31m'
@@ -36,7 +33,7 @@ NC='\033[0m'
 # --- Check Node.js prerequisite ---
 if ! command -v node &>/dev/null; then
   echo -e "${RED}ERROR: Node.js is required but not found.${NC}"
-  echo -e "MemoryForge hooks use Node.js for JSON parsing, MCP server, and search."
+  echo -e "MemoryForge hooks use Node.js for JSON parsing and the MCP server."
   echo -e "Install Node.js 18+ from: ${CYAN}https://nodejs.org/${NC}"
   exit 1
 fi
@@ -47,9 +44,6 @@ fi
 
 # --- Parse flags ---
 GLOBAL=false
-WITH_TEAM=false
-WITH_VECTOR=false
-WITH_GRAPH=false
 DRY_RUN=false
 NO_CLAUDE_MD=false
 UNINSTALL=false
@@ -58,10 +52,6 @@ TARGET_ARG=""
 for arg in "$@"; do
   case "$arg" in
     --global)           GLOBAL=true ;;
-    --with-team)        WITH_TEAM=true ;;
-    --with-vector)      WITH_VECTOR=true ;;
-    --with-graph)       WITH_GRAPH=true ;;
-    --full)             WITH_TEAM=true; WITH_VECTOR=true; WITH_GRAPH=true ;;
     --dry-run)          DRY_RUN=true ;;
     --no-claude-md)     NO_CLAUDE_MD=true ;;
     --uninstall)        UNINSTALL=true ;;
@@ -70,10 +60,6 @@ for arg in "$@"; do
       echo ""
       echo "Install flags:"
       echo "  --global           Install to ~/.claude/ (all projects)"
-      echo "  --with-team        Include team agents (orchestrator + builder)"
-      echo "  --with-vector      Include vector memory extension"
-      echo "  --with-graph       Include graph memory extension (Neo4j)"
-      echo "  --full             Include all extensions"
       echo ""
       echo "Brownfield flags:"
       echo "  --dry-run          Preview what would change (no writes)"
@@ -149,7 +135,6 @@ if [ "$UNINSTALL" = true ]; then
   fi
   echo ""
 
-  # Confirmation prompt to prevent accidental uninstall (Bug #16)
   if [ "$DRY_RUN" != true ]; then
     echo -e "  ${YELLOW}This will remove MemoryForge hooks and scripts from:${NC}"
     echo -e "  ${CYAN}$TARGET_DIR${NC}"
@@ -175,7 +160,7 @@ if [ "$UNINSTALL" = true ]; then
     HOOKS_DIR="$TARGET_DIR/scripts/hooks"
   fi
 
-  MF_HOOKS="session-start.sh pre-compact.sh user-prompt-context.sh stop-checkpoint.sh session-end.sh subagent-start.sh subagent-stop.sh task-completed.sh"
+  MF_HOOKS="session-start.sh pre-compact.sh session-end.sh"
 
   for hook in $MF_HOOKS; do
     HOOK_PATH="$HOOKS_DIR/$hook"
@@ -196,7 +181,6 @@ if [ "$UNINSTALL" = true ]; then
       dry "Would remove empty directory $HOOKS_DIR"
     else
       rmdir "$HOOKS_DIR" 2>/dev/null || true
-      # Also try removing parent scripts/ if empty
       SCRIPTS_DIR="$(dirname "$HOOKS_DIR")"
       if [ "$(basename "$SCRIPTS_DIR")" = "scripts" ] && [ -z "$(ls -A "$SCRIPTS_DIR" 2>/dev/null)" ]; then
         rmdir "$SCRIPTS_DIR" 2>/dev/null || true
@@ -207,21 +191,32 @@ if [ "$UNINSTALL" = true ]; then
   # 2. Remove MemoryForge hooks from settings.json
   SETTINGS_PATH="$CLAUDE_DIR/settings.json"
   if [ -f "$SETTINGS_PATH" ]; then
-    MERGE_FLAGS=""
-    [ "$DRY_RUN" = true ] && MERGE_FLAGS="--dry-run"
-
-    MERGE_RESULT=$(node "$SCRIPT_DIR/scripts/merge-settings.js" "$SETTINGS_PATH" --uninstall $MERGE_FLAGS 2>/dev/null || echo '{"result":"error"}')
-    MERGE_STATUS=$(echo "$MERGE_RESULT" | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{console.log(JSON.parse(d).result)}catch{console.log('error')}})" 2>/dev/null || echo "error")
-
-    if [ "$MERGE_STATUS" = "uninstalled" ] || [ "$MERGE_STATUS" = "dry-run" ]; then
+    if grep -q "session-start.sh" "$SETTINGS_PATH" 2>/dev/null; then
       if [ "$DRY_RUN" = true ]; then
         dry "Would remove MemoryForge hooks from settings.json"
       else
-        ok "Removed MemoryForge hooks from settings.json"
+        cp "$SETTINGS_PATH" "${SETTINGS_PATH}.backup"
+        # Remove MemoryForge hook entries using node
+        SETTINGS_FILE="$SETTINGS_PATH" node -e "
+          const fs = require('fs');
+          const p = process.env.SETTINGS_FILE;
+          const s = JSON.parse(fs.readFileSync(p, 'utf-8'));
+          if (s.hooks) {
+            for (const [event, handlers] of Object.entries(s.hooks)) {
+              s.hooks[event] = handlers.filter(h =>
+                !JSON.stringify(h).includes('memoryforge') &&
+                !JSON.stringify(h).includes('session-start.sh') &&
+                !JSON.stringify(h).includes('pre-compact.sh') &&
+                !JSON.stringify(h).includes('session-end.sh')
+              );
+              if (s.hooks[event].length === 0) delete s.hooks[event];
+            }
+            if (Object.keys(s.hooks).length === 0) delete s.hooks;
+          }
+          fs.writeFileSync(p, JSON.stringify(s, null, 2) + '\n');
+        " 2>/dev/null && ok "Removed MemoryForge hooks from settings.json" || warn "Could not clean settings.json"
       fi
       REMOVED=$((REMOVED + 1))
-    elif [ "$MERGE_STATUS" = "skip" ]; then
-      skip "No MemoryForge hooks in settings.json"
     fi
   fi
 
@@ -238,19 +233,20 @@ if [ "$UNINSTALL" = true ]; then
       REMOVED=$((REMOVED + 1))
     fi
   else
-    # Remove MCP server script from scripts/
-    MCP_SERVER="$TARGET_DIR/scripts/mcp-memory-server.js"
-    if [ -f "$MCP_SERVER" ]; then
-      if [ "$DRY_RUN" = true ]; then
-        dry "Would remove $MCP_SERVER"
-      else
-        rm -f "$MCP_SERVER"
-        ok "Removed scripts/mcp-memory-server.js"
+    for script in mcp-memory-server.js compress-sessions.js config-keys.js; do
+      SCRIPT_PATH="$TARGET_DIR/scripts/$script"
+      if [ -f "$SCRIPT_PATH" ]; then
+        if [ "$DRY_RUN" = true ]; then
+          dry "Would remove scripts/$script"
+        else
+          rm -f "$SCRIPT_PATH"
+          ok "Removed scripts/$script"
+        fi
+        REMOVED=$((REMOVED + 1))
       fi
-      REMOVED=$((REMOVED + 1))
-    fi
+    done
 
-    # Remove "memory" entry from .mcp.json (smart removal)
+    # Remove "memory" entry from .mcp.json
     MCP_JSON="$TARGET_DIR/.mcp.json"
     if [ -f "$MCP_JSON" ] && grep -q "mcp-memory-server\|memoryforge" "$MCP_JSON" 2>/dev/null; then
       if [ "$DRY_RUN" = true ]; then
@@ -279,40 +275,23 @@ if [ "$UNINSTALL" = true ]; then
       fi
       REMOVED=$((REMOVED + 1))
     fi
-
-    # Remove .mcp.json backup/reference
-    for ref in "${MCP_JSON}.backup" "$TARGET_DIR/.mcp.memoryforge.json"; do
-      if [ -f "$ref" ]; then
-        if [ "$DRY_RUN" = true ]; then
-          dry "Would remove $(basename "$ref")"
-        else
-          rm -f "$ref"
-        fi
-      fi
-    done
   fi
 
   # 4. Remove agents
-  MF_AGENTS="mind.md orchestrator.md builder.md"
-  for agent in $MF_AGENTS; do
-    AGENT_PATH="$CLAUDE_DIR/agents/$agent"
-    if [ -f "$AGENT_PATH" ]; then
-      # Only remove if it's a MemoryForge agent (check for signature)
-      if grep -q "MemoryForge\|\.mind/" "$AGENT_PATH" 2>/dev/null; then
-        if [ "$DRY_RUN" = true ]; then
-          dry "Would remove $AGENT_PATH"
-        else
-          rm -f "$AGENT_PATH"
-          ok "Removed agents/$agent"
-        fi
-        REMOVED=$((REMOVED + 1))
+  MIND_AGENT="$CLAUDE_DIR/agents/mind.md"
+  if [ -f "$MIND_AGENT" ]; then
+    if grep -q "MemoryForge\|\.mind/" "$MIND_AGENT" 2>/dev/null; then
+      if [ "$DRY_RUN" = true ]; then
+        dry "Would remove $MIND_AGENT"
       else
-        skip "agents/$agent doesn't appear to be from MemoryForge"
+        rm -f "$MIND_AGENT"
+        ok "Removed agents/mind.md"
       fi
+      REMOVED=$((REMOVED + 1))
     fi
-  done
+  fi
 
-  # 5. Remove tracking files (NOT state files — those are user data)
+  # 5. Remove tracking files (NOT state files)
   if [ "$GLOBAL" != true ]; then
     TRACKING_FILES=".mind/.last-activity .mind/.agent-activity .mind/.task-completions .mind/.session-tracking .mind/.file-tracker"
     for tf in $TRACKING_FILES; do
@@ -328,7 +307,6 @@ if [ "$UNINSTALL" = true ]; then
       fi
     done
 
-    # Remove checkpoints directory
     if [ -d "$TARGET_DIR/.mind/checkpoints" ]; then
       if [ "$DRY_RUN" = true ]; then
         dry "Would remove .mind/checkpoints/"
@@ -343,18 +321,6 @@ if [ "$UNINSTALL" = true ]; then
     echo -e "    ${BOLD}Preserved:${NC} .mind/STATE.md, PROGRESS.md, DECISIONS.md, SESSION-LOG.md"
     echo -e "    ${DIM}These are your project data. Delete manually if you want them gone.${NC}"
   fi
-
-  # 6. Remove reference config
-  for ref in "$CLAUDE_DIR/settings.memoryforge.json" "$CLAUDE_DIR/settings.json.backup"; do
-    if [ -f "$ref" ]; then
-      if [ "$DRY_RUN" = true ]; then
-        dry "Would remove $(basename "$ref")"
-      else
-        rm -f "$ref"
-        ok "Removed $(basename "$ref")"
-      fi
-    fi
-  done
 
   echo ""
   if [ "$DRY_RUN" = true ]; then
@@ -372,13 +338,6 @@ fi
 # INSTALL MODE
 # =============================================================================
 
-# Count extensions
-EXT_COUNT=0
-EXT_LIST=""
-[ "$WITH_TEAM" = true ]   && EXT_COUNT=$((EXT_COUNT + 1)) && EXT_LIST+="team "
-[ "$WITH_VECTOR" = true ] && EXT_COUNT=$((EXT_COUNT + 1)) && EXT_LIST+="vector "
-[ "$WITH_GRAPH" = true ]  && EXT_COUNT=$((EXT_COUNT + 1)) && EXT_LIST+="graph "
-
 # Header
 echo ""
 echo -e "${BOLD}${BLUE}  MemoryForge Installer${NC}"
@@ -393,40 +352,14 @@ if [ "$GLOBAL" = true ]; then
 else
   echo -e "  ${CYAN}Target${NC}  $TARGET_DIR ${DIM}(project-level)${NC}"
 fi
-echo -e "  ${CYAN}Scope${NC}   Core + ${EXT_COUNT} extension(s)${DIM}${EXT_LIST:+ ($EXT_LIST)}${NC}"
 echo ""
 
-# --- Detect existing memory systems ---
-if [ "$GLOBAL" != true ]; then
-  DETECT_RESULT=$(node "$SCRIPT_DIR/scripts/detect-existing.js" "$TARGET_DIR" 2>/dev/null || echo '{"findings_count":0}')
-  FINDINGS_COUNT=$(echo "$DETECT_RESULT" | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{console.log(JSON.parse(d).findings_count)}catch{console.log(0)}})" 2>/dev/null || echo "0")
-
-  if [ "$FINDINGS_COUNT" -gt 0 ] 2>/dev/null; then
-    echo -e "${YELLOW}  Existing memory systems detected:${NC}"
-    echo "$DETECT_RESULT" | node -e "
-      let d='';process.stdin.on('data',c=>d+=c);
-      process.stdin.on('end',()=>{
-        try {
-          const r = JSON.parse(d);
-          for (const f of r.findings) {
-            console.log('    - ' + f.system + ': ' + f.note);
-          }
-        } catch {}
-      })
-    " 2>/dev/null || true
-    echo ""
-  fi
-fi
-
-# Calculate total steps (7 base steps for project-level, 6 for global)
+# Calculate total steps (6 base for project-level, 5 for global or no-claude-md)
 if [ "$GLOBAL" = true ] || [ "$NO_CLAUDE_MD" = true ]; then
-  total_steps=6
+  total_steps=5
 else
-  total_steps=7
+  total_steps=6
 fi
-[ "$WITH_TEAM" = true ]   && total_steps=$((total_steps + 1))
-[ "$WITH_VECTOR" = true ] && total_steps=$((total_steps + 1))
-[ "$WITH_GRAPH" = true ]  && total_steps=$((total_steps + 1))
 
 # =============================================================================
 # STEP 1: Hook scripts
@@ -440,16 +373,16 @@ else
 fi
 
 if [ "$DRY_RUN" = true ]; then
-  dry "Would copy 8 hooks to $HOOKS_DIR"
+  dry "Would copy 3 hooks to $HOOKS_DIR"
 else
   mkdir -p "$HOOKS_DIR"
   cp "$SCRIPT_DIR/scripts/hooks/"*.sh "$HOOKS_DIR/"
   chmod +x "$HOOKS_DIR/"*.sh
-  ok "Copied 8 hooks to ${HOOKS_DIR/$HOME/\~}"
+  ok "Copied 3 hooks to ${HOOKS_DIR/$HOME/\~}"
 fi
 
 # =============================================================================
-# STEP 2: Hook configuration (.claude/settings.json) — SMART MERGE
+# STEP 2: Hook configuration (.claude/settings.json)
 # =============================================================================
 step "Configuring .claude/settings.json..."
 
@@ -467,33 +400,35 @@ if [ -f "$SETTINGS_PATH" ]; then
   if grep -q "session-start.sh" "$SETTINGS_PATH" 2>/dev/null; then
     skip ".claude/settings.json already has MemoryForge hooks"
   else
-    # Smart merge
+    # Smart merge using inline Node.js
     if [ "$DRY_RUN" = true ]; then
-      dry "Would smart-merge MemoryForge hooks into existing settings.json"
-      node "$SCRIPT_DIR/scripts/merge-settings.js" "$SETTINGS_PATH" "$MF_SETTINGS" --dry-run 2>/dev/null | node -e "
-        let d='';process.stdin.on('data',c=>d+=c);
-        process.stdin.on('end',()=>{
-          try {
-            const r = JSON.parse(d);
-            if (r.changes) r.changes.forEach(c => console.log('      ' + c));
-          } catch {}
-        })
-      " 2>/dev/null || true
+      dry "Would merge MemoryForge hooks into existing settings.json"
     else
       mkdir -p "$CLAUDE_DIR"
-      MERGE_RESULT=$(node "$SCRIPT_DIR/scripts/merge-settings.js" "$SETTINGS_PATH" "$MF_SETTINGS" 2>/dev/null || echo '{"result":"error"}')
-      MERGE_STATUS=$(echo "$MERGE_RESULT" | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{console.log(JSON.parse(d).result)}catch{console.log('error')}})" 2>/dev/null || echo "error")
-
-      if [ "$MERGE_STATUS" = "merged" ]; then
-        ok "Smart-merged hooks into existing settings.json"
-        ok "Backup saved: settings.json.backup"
-      elif [ "$MERGE_STATUS" = "skip" ]; then
-        skip "All hooks already present"
-      else
-        warn "Smart merge failed — saving reference config instead."
+      cp "$SETTINGS_PATH" "${SETTINGS_PATH}.backup"
+      EXISTING_FILE="$SETTINGS_PATH" MF_FILE="$MF_SETTINGS" node -e "
+        const fs = require('fs');
+        const existing = JSON.parse(fs.readFileSync(process.env.EXISTING_FILE, 'utf-8'));
+        const mf = JSON.parse(fs.readFileSync(process.env.MF_FILE, 'utf-8'));
+        existing.hooks = existing.hooks || {};
+        for (const [event, handlers] of Object.entries(mf.hooks || {})) {
+          if (!existing.hooks[event]) {
+            existing.hooks[event] = handlers;
+          } else {
+            const existingStr = JSON.stringify(existing.hooks[event]);
+            for (const handler of handlers) {
+              if (!existingStr.includes(JSON.stringify(handler).slice(1, -1))) {
+                existing.hooks[event].push(handler);
+              }
+            }
+          }
+        }
+        fs.writeFileSync(process.env.EXISTING_FILE, JSON.stringify(existing, null, 2) + '\n');
+      " 2>/dev/null && ok "Merged hooks into existing settings.json" || {
+        warn "Merge failed — saving reference config instead."
         cp "$MF_SETTINGS" "$CLAUDE_DIR/settings.memoryforge.json"
         ok "Saved reference: .claude/settings.memoryforge.json"
-      fi
+      }
     fi
   fi
 else
@@ -517,7 +452,6 @@ step "Configuring MCP memory server..."
 MCP_JSON="$TARGET_DIR/.mcp.json"
 MF_MCP_JSON="$SCRIPT_DIR/.mcp.json"
 
-# For global installs, copy MCP server script to ~/.claude/
 if [ "$GLOBAL" = true ]; then
   MCP_SERVER_DEST="$HOME/.claude/mcp-memory-server.js"
   if [ "$DRY_RUN" = true ]; then
@@ -532,13 +466,10 @@ elif [ -f "$MCP_JSON" ]; then
   if grep -q "mcp-memory-server\|memoryforge" "$MCP_JSON" 2>/dev/null; then
     skip ".mcp.json already has MemoryForge memory server"
   else
-    # Smart merge: add our server to existing .mcp.json
     if [ "$DRY_RUN" = true ]; then
       dry "Would add memory server to existing .mcp.json"
     else
-      # Backup
       cp "$MCP_JSON" "${MCP_JSON}.backup"
-      # Use node to merge
       MCP_FILE="$MCP_JSON" MF_FILE="$MF_MCP_JSON" node -e "
         const fs = require('fs');
         const existing = JSON.parse(fs.readFileSync(process.env.MCP_FILE, 'utf-8'));
@@ -567,7 +498,7 @@ if [ "$GLOBAL" != true ]; then
     dry "Would copy scripts to $TARGET_DIR/scripts/"
   else
     mkdir -p "$TARGET_DIR/scripts"
-    for script in mcp-memory-server.js vector-memory.js config-keys.js compress-sessions.js health-check.js; do
+    for script in mcp-memory-server.js config-keys.js compress-sessions.js; do
       if [ -f "$SCRIPT_DIR/scripts/$script" ]; then
         cp "$SCRIPT_DIR/scripts/$script" "$TARGET_DIR/scripts/$script"
       fi
@@ -607,25 +538,7 @@ else
 fi
 
 # =============================================================================
-# STEP 5: Mind agent
-# =============================================================================
-step "Installing Mind agent..."
-
-MIND_AGENT="$CLAUDE_DIR/agents/mind.md"
-if [ -f "$MIND_AGENT" ]; then
-  skip ".claude/agents/mind.md"
-else
-  if [ "$DRY_RUN" = true ]; then
-    dry "Would create .claude/agents/mind.md"
-  else
-    mkdir -p "$CLAUDE_DIR/agents"
-    cp "$SCRIPT_DIR/.claude/agents/mind.md" "$MIND_AGENT"
-    ok "Created .claude/agents/mind.md"
-  fi
-fi
-
-# =============================================================================
-# STEP 6: .gitignore (project-level only)
+# STEP 5: .gitignore (project-level only)
 # =============================================================================
 step "Updating .gitignore..."
 
@@ -644,7 +557,6 @@ else
     ".mind/.prompt-context"
     ".mind/.mcp-errors.log"
     ".mind/ARCHIVE.md"
-    ".mind/dashboard.html"
     ".mind/checkpoints/"
     "*.pre-compress"
   )
@@ -665,7 +577,7 @@ else
 fi
 
 # =============================================================================
-# STEP 7: CLAUDE.md — Mind Protocol (default for project-level)
+# STEP 6: CLAUDE.md — Mind Protocol (default for project-level)
 # =============================================================================
 if [ "$GLOBAL" != true ] && [ "$NO_CLAUDE_MD" != true ]; then
   step "Adding Mind Protocol to CLAUDE.md..."
@@ -680,8 +592,6 @@ if [ "$GLOBAL" != true ] && [ "$NO_CLAUDE_MD" != true ]; then
   elif [ -f "$CLAUDE_MD" ]; then
     if [ "$DRY_RUN" = true ]; then
       dry "Would append Mind Protocol section to existing CLAUDE.md"
-      TEMPLATE_LINES=$(wc -l < "$TEMPLATE")
-      dry "(~$TEMPLATE_LINES lines from templates/CLAUDE.md.template)"
     else
       echo "" >> "$CLAUDE_MD"
       echo "" >> "$CLAUDE_MD"
@@ -699,67 +609,7 @@ if [ "$GLOBAL" != true ] && [ "$NO_CLAUDE_MD" != true ]; then
 fi
 
 # =============================================================================
-# EXTENSIONS
-# =============================================================================
-
-if [ "$WITH_TEAM" = true ]; then
-  step "Installing Team Memory extension..."
-
-  for agent in orchestrator.md builder.md; do
-    DEST="$CLAUDE_DIR/agents/$agent"
-    if [ -f "$DEST" ]; then
-      skip ".claude/agents/$agent"
-    else
-      if [ "$DRY_RUN" = true ]; then
-        dry "Would create .claude/agents/$agent"
-      else
-        mkdir -p "$CLAUDE_DIR/agents"
-        cp "$SCRIPT_DIR/extensions/team-memory/agents/$agent" "$DEST"
-        ok "Created .claude/agents/$agent"
-      fi
-    fi
-  done
-fi
-
-if [ "$WITH_VECTOR" = true ]; then
-  step "Installing Vector Memory extension..."
-
-  if [ "$GLOBAL" = true ]; then
-    VECTOR_DIR="$HOME/.claude/extensions/vector-memory"
-  else
-    VECTOR_DIR="$TARGET_DIR/extensions/vector-memory"
-  fi
-
-  if [ "$DRY_RUN" = true ]; then
-    dry "Would install vector-memory extension to $VECTOR_DIR"
-  else
-    mkdir -p "$VECTOR_DIR"
-    cp "$SCRIPT_DIR/extensions/vector-memory/README.md" "$VECTOR_DIR/README.md"
-    ok "Installed vector-memory extension"
-  fi
-fi
-
-if [ "$WITH_GRAPH" = true ]; then
-  step "Installing Graph Memory extension..."
-
-  if [ "$GLOBAL" = true ]; then
-    GRAPH_DIR="$HOME/.claude/extensions/graph-memory"
-  else
-    GRAPH_DIR="$TARGET_DIR/extensions/graph-memory"
-  fi
-
-  if [ "$DRY_RUN" = true ]; then
-    dry "Would install graph-memory extension to $GRAPH_DIR"
-  else
-    mkdir -p "$GRAPH_DIR"
-    cp "$SCRIPT_DIR/extensions/graph-memory/README.md" "$GRAPH_DIR/README.md"
-    cp "$SCRIPT_DIR/extensions/graph-memory/docker-compose.yml" "$GRAPH_DIR/docker-compose.yml"
-    ok "Installed graph-memory extension"
-  fi
-fi
-
-# =============================================================================
-# VERSION TRACKING (Wave 16)
+# VERSION TRACKING
 # =============================================================================
 if [ "$GLOBAL" != true ]; then
   VERSION_FILE="$TARGET_DIR/.memoryforge-version"
@@ -796,10 +646,9 @@ fi
 echo ""
 
 echo -e "  ${BOLD}Installed:${NC}"
-echo -e "    ${GREEN}+${NC} 8 hook scripts"
+echo -e "    ${GREEN}+${NC} 3 hook scripts"
 echo -e "    ${GREEN}+${NC} .claude/settings.json ${DIM}(smart-merged if existing)${NC}"
 echo -e "    ${GREEN}+${NC} MCP memory server ${DIM}(6 tools for querying/updating .mind/)${NC}"
-echo -e "    ${GREEN}+${NC} Mind agent"
 if [ "$GLOBAL" != true ]; then
   echo -e "    ${GREEN}+${NC} .mind/ state files (4 templates)"
   echo -e "    ${GREEN}+${NC} .gitignore entries"
@@ -807,9 +656,6 @@ if [ "$GLOBAL" != true ]; then
     echo -e "    ${GREEN}+${NC} Mind Protocol in CLAUDE.md"
   fi
 fi
-[ "$WITH_TEAM" = true ]   && echo -e "    ${GREEN}+${NC} Team agents (orchestrator + builder)"
-[ "$WITH_VECTOR" = true ] && echo -e "    ${GREEN}+${NC} Vector memory extension"
-[ "$WITH_GRAPH" = true ]  && echo -e "    ${GREEN}+${NC} Graph memory extension (Neo4j)"
 
 echo ""
 echo -e "  ${BOLD}Next steps:${NC}"

@@ -33,7 +33,6 @@ const defaults = {
   keepSessionsFull: 5,
   keepDecisionsFull: 10,
   archiveAfterDays: 30,
-  trackingMaxLines: 100,
 };
 let userConfig = {};
 try {
@@ -68,9 +67,8 @@ function safeInt(val, fallback, min) {
 const KEEP_SESSIONS_FULL = safeInt(config.keepSessionsFull, defaults.keepSessionsFull, 1);
 const KEEP_DECISIONS_FULL = safeInt(config.keepDecisionsFull, defaults.keepDecisionsFull, 1);
 const ARCHIVE_AFTER_DAYS = safeInt(config.archiveAfterDays, defaults.archiveAfterDays, 1);
-const TRACKING_MAX_LINES = safeInt(config.trackingMaxLines, defaults.trackingMaxLines, 10);
-// Reject compressThresholdBytes=0 which silently disables compression (Bug #3)
-const COMPRESS_THRESHOLD_BYTES = safeInt(config.compressThresholdBytes, 12000, 1000);
+const TRACKING_MAX_LINES = 100;
+const COMPRESS_THRESHOLD_BYTES = 12000;
 const MAX_PRE_COMPRESS_BACKUPS = 3;
 
 function readFile(filePath) {

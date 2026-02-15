@@ -44,17 +44,7 @@ const mindDir = process.argv[1];
 const trigger = process.argv[2];
 const checkpointDir = path.join(mindDir, 'checkpoints');
 
-// Load config for maxCheckpointFiles (default: 10)
-let maxCheckpointFiles = 10;
-try {
-  const cfgPath = path.join(path.resolve(mindDir, '..'), '.memoryforge.config.json');
-  const cfgStat = fs.lstatSync(cfgPath);
-  if (!cfgStat.isSymbolicLink() && cfgStat.isFile()) {
-    const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf-8'));
-    const val = Math.floor(Number(cfg.maxCheckpointFiles));
-    if (Number.isSafeInteger(val) && val >= 3) maxCheckpointFiles = val;
-  }
-} catch {}
+const maxCheckpointFiles = 10;
 const timestamp = new Date().toISOString().replace(/[:.]/g, '-').replace(/Z$/, 'Z');
 const isoTimestamp = new Date().toISOString();
 

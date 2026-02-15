@@ -4,8 +4,12 @@
 # =============================================================================
 # Fires when a session terminates (clear, logout, exit).
 #
-# Logs the session end timestamp. If SESSION-LOG.md wasn't updated during this
-# session, auto-generates a summary from the file tracker (Wave 2).
+# 1. Writes .last-activity timestamp (absorbed from stop-checkpoint)
+# 2. Tracks file changes via git diff (absorbed from stop-checkpoint)
+# 3. Logs session end to .session-tracking
+# 4. Auto-generates session summary if SESSION-LOG.md wasn't updated
+# 5. Warns if STATE.md is stale
+# 6. Creates a session-end checkpoint
 #
 # Input (stdin JSON): { session_id, reason, transcript_path }
 # Output: stderr only (SessionEnd doesn't support additionalContext)
@@ -19,6 +23,33 @@ TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 DATE_SHORT=$(date -u +"%Y-%m-%d")
 
 mkdir -p "$MIND_DIR/checkpoints"
+
+# Write last-activity timestamp (from stop-checkpoint.sh)
+echo "$TIMESTAMP" > "$MIND_DIR/.last-activity"
+
+# --- File change tracking (from stop-checkpoint.sh) ---
+if command -v git &>/dev/null && git -C "$PROJECT_DIR" rev-parse --is-inside-work-tree &>/dev/null 2>&1; then
+  TRACKER="$MIND_DIR/.file-tracker"
+  {
+    git -C "$PROJECT_DIR" diff --name-only HEAD 2>/dev/null || true
+    git -C "$PROJECT_DIR" diff --staged --name-only 2>/dev/null || true
+    git -C "$PROJECT_DIR" ls-files --others --exclude-standard 2>/dev/null || true
+  } | sort -u | grep -v '^\.mind/' > "$TRACKER.tmp" 2>/dev/null || true
+
+  if [ -s "$TRACKER.tmp" ]; then
+    if [ ! -f "$TRACKER" ]; then
+      echo "# Session file changes (tracked at $TIMESTAMP)" > "$TRACKER"
+    fi
+    if [ -f "$TRACKER" ]; then
+      while IFS= read -r file; do
+        if ! grep -qF "$file" "$TRACKER" 2>/dev/null; then
+          echo "$file" >> "$TRACKER"
+        fi
+      done < "$TRACKER.tmp"
+    fi
+  fi
+  rm -f "$TRACKER.tmp"
+fi
 
 # Read stdin for reason
 INPUT=$(cat)

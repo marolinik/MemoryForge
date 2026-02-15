@@ -2,7 +2,7 @@
 // =============================================================================
 // MemoryForge: Hook Integration Tests
 // =============================================================================
-// Simulates a full hook lifecycle: session-start → stop-checkpoint → session-end.
+// Tests the 3-hook lifecycle: session-start → session-end, plus pre-compact.
 // Verifies that hooks produce valid JSON output and state files are created/updated.
 //
 // Requirements: bash (Git Bash on Windows)
@@ -112,70 +112,37 @@ test('session-start.sh handles compact source', () => {
   } finally { cleanup(projectDir); }
 });
 
-test('user-prompt-context.sh produces valid JSON nudge', () => {
-  const { projectDir } = createTempProject();
-  try {
-    const output = runHook('user-prompt-context.sh', projectDir, { session_id: 'test-3', prompt: 'hello' });
-    const parsed = JSON.parse(output);
-    assert.ok(parsed.hookSpecificOutput, 'Should have hookSpecificOutput');
-    const ctx = parsed.hookSpecificOutput.additionalContext;
-    assert.ok(ctx.includes('[Memory]'), 'Should have [Memory] prefix');
-    assert.ok(ctx.includes('Phase 1'), 'Should include current phase');
-    assert.ok(ctx.includes('Build the thing'), 'Should include next action');
-  } finally { cleanup(projectDir); }
-});
-
-test('user-prompt-context.sh caches output', () => {
+test('session-end.sh writes last-activity and session-tracking', () => {
   const { projectDir, mindDir } = createTempProject();
   try {
-    // First call generates cache
-    runHook('user-prompt-context.sh', projectDir, { session_id: 'test-4', prompt: 'first' });
-    assert.ok(fs.existsSync(path.join(mindDir, '.prompt-context')), 'Cache file should exist');
+    runHook('session-end.sh', projectDir, { session_id: 'test-3', reason: 'user_exit' });
 
-    // Second call should use cache (verify by checking file exists and output matches)
-    const output = runHook('user-prompt-context.sh', projectDir, { session_id: 'test-4', prompt: 'second' });
-    const parsed = JSON.parse(output);
-    assert.ok(parsed.hookSpecificOutput.additionalContext.includes('Phase 1'), 'Cached output should still have phase');
-  } finally { cleanup(projectDir); }
-});
-
-test('stop-checkpoint.sh writes last-activity timestamp', () => {
-  const { projectDir, mindDir } = createTempProject();
-  try {
-    runHook('stop-checkpoint.sh', projectDir, { session_id: 'test-5', stop_hook_active: false });
+    // .last-activity should be created (absorbed from stop-checkpoint)
     const activityFile = path.join(mindDir, '.last-activity');
     assert.ok(fs.existsSync(activityFile), '.last-activity should exist');
-    const content = fs.readFileSync(activityFile, 'utf-8').trim();
-    assert.ok(/^\d{4}-\d{2}-\d{2}T/.test(content), 'Should be ISO timestamp');
-  } finally { cleanup(projectDir); }
-});
+    const activityContent = fs.readFileSync(activityFile, 'utf-8').trim();
+    assert.ok(/^\d{4}-\d{2}-\d{2}T/.test(activityContent), 'Should be ISO timestamp');
 
-test('session-end.sh writes session-tracking and checkpoint', () => {
-  const { projectDir, mindDir } = createTempProject();
-  try {
-    // Write a last-activity file so session-end can check staleness
-    fs.writeFileSync(path.join(mindDir, '.last-activity'), new Date().toISOString());
-    runHook('session-end.sh', projectDir, { session_id: 'test-6', reason: 'user_exit' });
+    // .session-tracking should exist
     assert.ok(fs.existsSync(path.join(mindDir, '.session-tracking')), '.session-tracking should exist');
     const tracking = fs.readFileSync(path.join(mindDir, '.session-tracking'), 'utf-8');
     assert.ok(tracking.includes('user_exit'), 'Should log the exit reason');
+
+    // session-end checkpoint should exist
     assert.ok(fs.existsSync(path.join(mindDir, 'checkpoints', 'session-end-latest.md')), 'Session-end checkpoint should exist');
   } finally { cleanup(projectDir); }
 });
 
-test('full lifecycle: session-start → stop → session-end', () => {
+test('full lifecycle: session-start → session-end', () => {
   const { projectDir, mindDir } = createTempProject();
   try {
     // 1. Session starts
     const startOutput = runHook('session-start.sh', projectDir, { session_id: 'lifecycle', source: 'startup' });
     assert.ok(JSON.parse(startOutput).hookSpecificOutput, 'session-start should produce briefing');
 
-    // 2. Stop checkpoint
-    runHook('stop-checkpoint.sh', projectDir, { session_id: 'lifecycle', stop_hook_active: false });
-    assert.ok(fs.existsSync(path.join(mindDir, '.last-activity')), 'stop-checkpoint should create .last-activity');
-
-    // 3. Session ends
+    // 2. Session ends (now includes stop-checkpoint functionality)
     runHook('session-end.sh', projectDir, { session_id: 'lifecycle', reason: 'completed' });
+    assert.ok(fs.existsSync(path.join(mindDir, '.last-activity')), 'session-end should create .last-activity');
     assert.ok(fs.existsSync(path.join(mindDir, '.session-tracking')), 'session-end should create .session-tracking');
     assert.ok(fs.existsSync(path.join(mindDir, 'checkpoints', 'session-end-latest.md')), 'session-end should create checkpoint');
   } finally { cleanup(projectDir); }
@@ -187,128 +154,50 @@ test('pre-compact.sh prunes checkpoints at boundary (exactly maxCheckpointFiles)
   const { projectDir, mindDir } = createTempProject();
   try {
     const cpDir = path.join(mindDir, 'checkpoints');
-    // Create exactly 10 checkpoint files (default maxCheckpointFiles=10)
+    // Create exactly 12 checkpoint files (default maxCheckpointFiles=10)
     for (let i = 0; i < 12; i++) {
       const ts = `2025-01-${String(i + 1).padStart(2, '0')}T00-00-00Z`;
       fs.writeFileSync(path.join(cpDir, `compact-${ts}.md`), `# Checkpoint ${i + 1}\n`);
     }
 
-    // Verify we have 12 before the hook runs
     const before = fs.readdirSync(cpDir).filter(f => f.startsWith('compact-') && f.endsWith('.md'));
     assert.equal(before.length, 12, 'Should have 12 checkpoints before pruning');
 
-    // Run pre-compact — this triggers checkpoint pruning
     runHook('pre-compact.sh', projectDir, { session_id: 'test-cp', trigger: 'auto' });
 
-    // After pruning: should have at most maxCheckpointFiles (10) plus the new one
-    // The hook creates a new one, then prunes to 10
     const after = fs.readdirSync(cpDir).filter(f => f.startsWith('compact-') && f.endsWith('.md'));
     assert.ok(after.length <= 10, `Should have <= 10 checkpoints after pruning, got ${after.length}`);
     assert.ok(after.length >= 1, 'Should keep at least 1 checkpoint');
   } finally { cleanup(projectDir); }
 });
 
-test('pre-compact.sh keeps exactly maxCheckpointFiles when at limit', () => {
+// --- Compaction survival loop e2e test ---
+
+test('compaction survival loop preserves state', () => {
   const { projectDir, mindDir } = createTempProject();
   try {
-    const cpDir = path.join(mindDir, 'checkpoints');
-    // Write a config with maxCheckpointFiles=5
-    fs.writeFileSync(path.join(projectDir, '.memoryforge.config.json'),
-      JSON.stringify({ maxCheckpointFiles: 5 }));
+    // 1. Session starts (source=startup) — verify briefing contains state
+    const startOutput = runHook('session-start.sh', projectDir, { session_id: 'e2e', source: 'startup' });
+    const startParsed = JSON.parse(startOutput);
+    const startCtx = startParsed.hookSpecificOutput.additionalContext;
+    assert.ok(startCtx.includes('Phase 1: Setup'), 'Startup briefing should contain state');
+    assert.ok(startCtx.includes('Build the thing'), 'Startup briefing should contain next action');
 
-    // Create exactly 5 checkpoint files (at the boundary)
-    for (let i = 0; i < 5; i++) {
-      const ts = `2025-02-${String(i + 1).padStart(2, '0')}T00-00-00Z`;
-      fs.writeFileSync(path.join(cpDir, `compact-${ts}.md`), `# Checkpoint ${i + 1}\n`);
-    }
+    // 2. Pre-compact fires — verify checkpoint created
+    const preCompactOutput = runHook('pre-compact.sh', projectDir, { session_id: 'e2e', trigger: 'auto' });
+    const pcParsed = JSON.parse(preCompactOutput);
+    assert.ok(pcParsed.hookSpecificOutput.additionalContext.includes('PRE-COMPACTION'), 'Pre-compact should output checkpoint context');
+    assert.ok(fs.existsSync(path.join(mindDir, 'checkpoints', 'latest.md')), 'Checkpoint latest.md should exist');
+    const checkpoint = fs.readFileSync(path.join(mindDir, 'checkpoints', 'latest.md'), 'utf-8');
+    assert.ok(checkpoint.includes('Phase 1: Setup'), 'Checkpoint should contain state');
 
-    // Run pre-compact — adds 1 new, prunes to 5
-    runHook('pre-compact.sh', projectDir, { session_id: 'test-cp2', trigger: 'auto' });
-
-    const after = fs.readdirSync(cpDir).filter(f => f.startsWith('compact-') && f.endsWith('.md'));
-    assert.ok(after.length <= 5, `Should have <= 5 checkpoints (config limit), got ${after.length}`);
-  } finally { cleanup(projectDir); }
-});
-
-// --- Config schema validation (Bug #22) / Symlink config (Bug #19) ---
-
-test('health-check detects unknown config keys', () => {
-  const { projectDir } = createTempProject();
-  try {
-    // Write a config with a typo key
-    fs.writeFileSync(path.join(projectDir, '.memoryforge.config.json'),
-      JSON.stringify({
-        keepSessionsFull: 5,
-        keepDecisiosnFull: 10,  // typo!
-        trackingMaxLiness: 100, // typo!
-      }));
-
-    const healthCheck = path.join(__dirname, '..', 'scripts', 'health-check.js');
-    // health-check exits non-zero on warnings — capture stdout from the error
-    let result;
-    try {
-      result = execSync(`node "${healthCheck}" --json "${projectDir}"`, {
-        encoding: 'utf-8', timeout: 10000, stdio: ['pipe', 'pipe', 'pipe'],
-      });
-    } catch (err) {
-      result = err.stdout;
-    }
-    const report = JSON.parse(result);
-    assert.ok(report.config.issues.length > 0, 'Should have config issues');
-    const unknownIssue = report.config.issues.find(i => i.includes('Unknown config key'));
-    assert.ok(unknownIssue, 'Should report unknown config keys');
-    assert.ok(unknownIssue.includes('keepDecisiosnFull'), 'Should mention the typo key');
-  } finally { cleanup(projectDir); }
-});
-
-test('health-check validates config with Number.isSafeInteger', () => {
-  const { projectDir } = createTempProject();
-  try {
-    // Write a config with extreme values
-    fs.writeFileSync(path.join(projectDir, '.memoryforge.config.json'),
-      JSON.stringify({
-        keepSessionsFull: 1e308,
-        compressThresholdBytes: -5,
-      }));
-
-    const healthCheck = path.join(__dirname, '..', 'scripts', 'health-check.js');
-    let result;
-    try {
-      result = execSync(`node "${healthCheck}" --json "${projectDir}"`, {
-        encoding: 'utf-8', timeout: 10000, stdio: ['pipe', 'pipe', 'pipe'],
-      });
-    } catch (err) {
-      result = err.stdout;
-    }
-    const report = JSON.parse(result);
-    assert.ok(!report.config.valid, 'Config with extreme values should be invalid');
-    assert.ok(report.config.issues.some(i => i.includes('keepSessionsFull')), 'Should flag extreme keepSessionsFull');
-    assert.ok(report.config.issues.some(i => i.includes('compressThresholdBytes')), 'Should flag negative compressThresholdBytes');
-  } finally { cleanup(projectDir); }
-});
-
-test('health-check rejects symlinked config', () => {
-  // Skip on Windows — symlinks require elevated privileges
-  if (process.platform === 'win32') return;
-
-  const { projectDir } = createTempProject();
-  try {
-    const realConfig = path.join(projectDir, 'real-config.json');
-    fs.writeFileSync(realConfig, JSON.stringify({ keepSessionsFull: 999 }));
-    fs.symlinkSync(realConfig, path.join(projectDir, '.memoryforge.config.json'));
-
-    const healthCheck = path.join(__dirname, '..', 'scripts', 'health-check.js');
-    let result;
-    try {
-      result = execSync(`node "${healthCheck}" --json "${projectDir}"`, {
-        encoding: 'utf-8', timeout: 10000, stdio: ['pipe', 'pipe', 'pipe'],
-      });
-    } catch (err) {
-      result = err.stdout;
-    }
-    const report = JSON.parse(result);
-    assert.ok(!report.config.valid, 'Symlinked config should be invalid');
-    assert.ok(report.config.issues.some(i => i.includes('symlink')), 'Should report symlink issue');
+    // 3. Session starts again (source=compact) — verify "CONTEXT RESTORED" with checkpoint
+    const restoreOutput = runHook('session-start.sh', projectDir, { session_id: 'e2e', source: 'compact' });
+    const restoreParsed = JSON.parse(restoreOutput);
+    const restoreCtx = restoreParsed.hookSpecificOutput.additionalContext;
+    assert.ok(restoreCtx.includes('CONTEXT RESTORED'), 'Post-compact briefing should say CONTEXT RESTORED');
+    assert.ok(restoreCtx.includes('Phase 1: Setup'), 'Post-compact briefing should contain state');
+    assert.ok(restoreCtx.includes('PRE-COMPACTION CHECKPOINT'), 'Post-compact briefing should include checkpoint');
   } finally { cleanup(projectDir); }
 });
 

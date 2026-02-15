@@ -4,10 +4,7 @@
 # Usage:
 #   .\install.ps1                                        # Core (current dir)
 #   .\install.ps1 -TargetDir "C:\my\project"             # Core (specific project)
-#   .\install.ps1 -TargetDir "C:\my\project" -WithTeam   # Core + Team agents
-#   .\install.ps1 -TargetDir "C:\my\project" -Full       # Core + all extensions
 #   .\install.ps1 -Global                                # Core (user-level)
-#   .\install.ps1 -Global -Full                          # User-level + everything
 #
 # Brownfield features:
 #   .\install.ps1 -DryRun                                # Preview changes only
@@ -20,10 +17,6 @@
 param(
     [string]$TargetDir = ".",
     [switch]$Global,
-    [switch]$WithTeam,
-    [switch]$WithVector,
-    [switch]$WithGraph,
-    [switch]$Full,
     [switch]$DryRun,
     [switch]$NoClaudeMd,
     [switch]$Uninstall,
@@ -31,7 +24,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$MemoryForgeVersion = "1.9.0"
+$MemoryForgeVersion = "2.0.0"
 
 # --- Help ---
 if ($Help) {
@@ -42,10 +35,6 @@ if ($Help) {
     Write-Host ""
     Write-Host "  Options:"
     Write-Host "    -Global       Install to ~/.claude/ (user-level)"
-    Write-Host "    -WithTeam     Include team agent templates"
-    Write-Host "    -WithVector   Include vector search extension"
-    Write-Host "    -WithGraph    Include graph memory extension"
-    Write-Host "    -Full         Enable all extensions"
     Write-Host "    -DryRun       Preview changes without modifying files"
     Write-Host "    -NoClaudeMd   Skip CLAUDE.md modifications"
     Write-Host "    -Uninstall    Remove MemoryForge from project"
@@ -63,13 +52,10 @@ try {
     }
 } catch {
     Write-Host "ERROR: Node.js is required but not found." -ForegroundColor Red
-    Write-Host "MemoryForge hooks use Node.js for JSON parsing, MCP server, and search."
+    Write-Host "MemoryForge hooks use Node.js for JSON parsing and the MCP server."
     Write-Host "Install Node.js 18+ from: https://nodejs.org/"
     exit 1
 }
-
-# Expand -Full into individual flags
-if ($Full) { $WithTeam = $true; $WithVector = $true; $WithGraph = $true }
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 
@@ -83,12 +69,6 @@ if ($Global) {
     $ClaudeDir = Join-Path $TargetDir ".claude"
     $Scope = "project"
 }
-
-# Count extensions
-$extNames = @()
-if ($WithTeam)   { $extNames += "team" }
-if ($WithVector) { $extNames += "vector" }
-if ($WithGraph)  { $extNames += "graph" }
 
 # Step counter
 $totalSteps = 0
@@ -137,9 +117,7 @@ if ($Uninstall) {
         $hooksDir = Join-Path $TargetDir "scripts\hooks"
     }
 
-    $MfHooks = @("session-start.sh", "pre-compact.sh", "user-prompt-context.sh",
-                  "stop-checkpoint.sh", "session-end.sh", "subagent-start.sh",
-                  "subagent-stop.sh", "task-completed.sh")
+    $MfHooks = @("session-start.sh", "pre-compact.sh", "session-end.sh")
 
     foreach ($hook in $MfHooks) {
         $hookPath = Join-Path $hooksDir $hook
@@ -168,23 +146,24 @@ if ($Uninstall) {
     # 2. Remove MemoryForge hooks from settings.json
     $settingsPath = Join-Path $ClaudeDir "settings.json"
     if (Test-Path $settingsPath) {
-        $mergeArgs = @("$ScriptDir\scripts\merge-settings.js", $settingsPath, "--uninstall")
-        if ($DryRun) { $mergeArgs += "--dry-run" }
-
-        try {
-            $mergeResult = & node @mergeArgs 2>$null | ConvertFrom-Json
-            if ($mergeResult.result -eq "uninstalled" -or $mergeResult.result -eq "dry-run") {
-                if ($DryRun) {
-                    Dry "Would remove MemoryForge hooks from settings.json"
-                } else {
+        if ((Get-Content $settingsPath -Raw) -match "session-start\.sh") {
+            if ($DryRun) {
+                Dry "Would remove MemoryForge hooks from settings.json"
+            } else {
+                Copy-Item $settingsPath "${settingsPath}.backup" -Force
+                $env:SETTINGS_FILE = ($settingsPath -replace '\\','/')
+                try {
+                    & node -e "const fs=require('fs');const p=process.env.SETTINGS_FILE;const s=JSON.parse(fs.readFileSync(p,'utf-8'));if(s.hooks){for(const[event,handlers]of Object.entries(s.hooks)){s.hooks[event]=handlers.filter(h=>!JSON.stringify(h).includes('session-start.sh')&&!JSON.stringify(h).includes('pre-compact.sh')&&!JSON.stringify(h).includes('session-end.sh'));if(s.hooks[event].length===0)delete s.hooks[event]}if(Object.keys(s.hooks).length===0)delete s.hooks}fs.writeFileSync(p,JSON.stringify(s,null,2)+'\n')" 2>$null
+                    $env:SETTINGS_FILE = $null
                     Ok "Removed MemoryForge hooks from settings.json"
+                } catch {
+                    $env:SETTINGS_FILE = $null
+                    Warn "Could not process settings.json: $_"
                 }
-                $Removed++
-            } elseif ($mergeResult.result -eq "skip") {
-                Skip "No MemoryForge hooks in settings.json"
             }
-        } catch {
-            Warn "Could not process settings.json: $_"
+            $Removed++
+        } else {
+            Skip "No MemoryForge hooks in settings.json"
         }
     }
 
@@ -201,16 +180,18 @@ if ($Uninstall) {
             $Removed++
         }
     } else {
-        # Remove MCP server script from scripts/
-        $mcpServer = Join-Path $TargetDir "scripts\mcp-memory-server.js"
-        if (Test-Path $mcpServer) {
-            if ($DryRun) {
-                Dry "Would remove $mcpServer"
-            } else {
-                Remove-Item $mcpServer -Force
-                Ok "Removed scripts\mcp-memory-server.js"
+        # Remove MCP server and supporting scripts
+        foreach ($script in @("mcp-memory-server.js", "compress-sessions.js", "config-keys.js")) {
+            $scriptPath = Join-Path $TargetDir "scripts\$script"
+            if (Test-Path $scriptPath) {
+                if ($DryRun) {
+                    Dry "Would remove scripts\$script"
+                } else {
+                    Remove-Item $scriptPath -Force
+                    Ok "Removed scripts\$script"
+                }
+                $Removed++
             }
-            $Removed++
         }
 
         # Remove "memory" entry from .mcp.json (smart removal)
@@ -230,6 +211,7 @@ if ($Uninstall) {
                         Ok "Removed .mcp.json (no other servers)"
                     }
                 } catch {
+                    $env:MCP_FILE = $null
                     Warn "Could not clean .mcp.json - remove 'memory' entry manually"
                 }
             }
@@ -249,22 +231,19 @@ if ($Uninstall) {
     }
 
     # 4. Remove agents (only if they contain MemoryForge signatures)
-    $MfAgents = @("mind.md", "orchestrator.md", "builder.md")
-    foreach ($agent in $MfAgents) {
-        $agentPath = Join-Path $ClaudeDir "agents\$agent"
-        if (Test-Path $agentPath) {
-            $content = Get-Content $agentPath -Raw -ErrorAction SilentlyContinue
-            if ($content -match "MemoryForge|\.mind/") {
-                if ($DryRun) {
-                    Dry "Would remove $agentPath"
-                } else {
-                    Remove-Item $agentPath -Force
-                    Ok "Removed agents\$agent"
-                }
-                $Removed++
+    $mindAgent = Join-Path $ClaudeDir "agents\mind.md"
+    if (Test-Path $mindAgent) {
+        $content = Get-Content $mindAgent -Raw -ErrorAction SilentlyContinue
+        if ($content -match "MemoryForge|\.mind/") {
+            if ($DryRun) {
+                Dry "Would remove $mindAgent"
             } else {
-                Skip "agents\$agent doesn't appear to be from MemoryForge"
+                Remove-Item $mindAgent -Force
+                Ok "Removed agents\mind.md"
             }
+            $Removed++
+        } else {
+            Skip "agents\mind.md doesn't appear to be from MemoryForge"
         }
     }
 
@@ -346,29 +325,14 @@ if ($Global) {
 } else {
     Write-Host "  Target  $TargetDir (project-level)" -ForegroundColor Cyan
 }
-Write-Host "  Scope   Core + $($extNames.Count) extension(s) $($extNames -join ', ')" -ForegroundColor Cyan
 Write-Host ""
 
-# --- Detect existing memory systems ---
-if (-not $Global) {
-    try {
-        $detectResult = & node "$ScriptDir\scripts\detect-existing.js" $TargetDir 2>$null | ConvertFrom-Json
-        if ($detectResult.findings_count -gt 0) {
-            Write-Host "  Existing memory systems detected:" -ForegroundColor Yellow
-            foreach ($finding in $detectResult.findings) {
-                Write-Host "    - $($finding.system): $($finding.note)" -ForegroundColor DarkGray
-            }
-            Write-Host ""
-        }
-    } catch {
-        # Detection failed silently - not critical
-    }
+# Calculate total steps (6 base for project, 5 for global or no-claude-md)
+if ($Global -or $NoClaudeMd) {
+    $totalSteps = 5
+} else {
+    $totalSteps = 6
 }
-
-# Calculate total steps
-# Base: 6 steps + CLAUDE.md (step 7) for project-level installs (unless --no-claude-md)
-$totalSteps = 6 + $extNames.Count
-if (-not $Global -and -not $NoClaudeMd) { $totalSteps++ }
 
 # =============================================================================
 # STEP 1: Hook scripts
@@ -382,11 +346,11 @@ if ($Global) {
 }
 
 if ($DryRun) {
-    Dry "Would copy 8 hooks to $hooksDir"
+    Dry "Would copy 3 hooks to $hooksDir"
 } else {
     New-Item -ItemType Directory -Force -Path $hooksDir | Out-Null
     Copy-Item "$ScriptDir\scripts\hooks\*.sh" $hooksDir -Force
-    Ok "Copied 8 hooks to $hooksDir"
+    Ok "Copied 3 hooks to $hooksDir"
 }
 
 # =============================================================================
@@ -411,33 +375,24 @@ if (Test-Path $settingsPath) {
     if ($content -match "session-start\.sh") {
         Skip ".claude\settings.json already has MemoryForge hooks"
     } else {
-        # Smart merge
+        # Smart merge using inline Node.js
         if ($DryRun) {
-            Dry "Would smart-merge MemoryForge hooks into existing settings.json"
-            try {
-                $preview = & node "$ScriptDir\scripts\merge-settings.js" $settingsPath $mfSettings --dry-run 2>$null | ConvertFrom-Json
-                if ($preview.changes) {
-                    foreach ($change in $preview.changes) {
-                        Write-Host "      $change" -ForegroundColor DarkGray
-                    }
-                }
-            } catch {}
+            Dry "Would merge MemoryForge hooks into existing settings.json"
         } else {
             New-Item -ItemType Directory -Force -Path $ClaudeDir | Out-Null
+            Copy-Item $settingsPath "${settingsPath}.backup" -Force
+            $env:EXISTING_FILE = ($settingsPath -replace '\\','/')
+            $env:MF_FILE = ($mfSettings -replace '\\','/')
             try {
-                $mergeResult = & node "$ScriptDir\scripts\merge-settings.js" $settingsPath $mfSettings 2>$null | ConvertFrom-Json
-                if ($mergeResult.result -eq "merged") {
-                    Ok "Smart-merged hooks into existing settings.json"
-                    Ok "Backup saved: settings.json.backup"
-                } elseif ($mergeResult.result -eq "skip") {
-                    Skip "All hooks already present"
-                } else {
-                    Warn "Smart merge failed - saving reference config instead."
-                    Copy-Item $mfSettings (Join-Path $ClaudeDir "settings.memoryforge.json")
-                    Ok "Saved reference: .claude\settings.memoryforge.json"
-                }
+                & node -e "const fs=require('fs');const existing=JSON.parse(fs.readFileSync(process.env.EXISTING_FILE,'utf-8'));const mf=JSON.parse(fs.readFileSync(process.env.MF_FILE,'utf-8'));existing.hooks=existing.hooks||{};for(const[event,handlers]of Object.entries(mf.hooks||{})){if(!existing.hooks[event]){existing.hooks[event]=handlers}else{const existingStr=JSON.stringify(existing.hooks[event]);for(const handler of handlers){if(!existingStr.includes(JSON.stringify(handler).slice(1,-1))){existing.hooks[event].push(handler)}}}}fs.writeFileSync(process.env.EXISTING_FILE,JSON.stringify(existing,null,2)+'\n')" 2>$null
+                $env:EXISTING_FILE = $null
+                $env:MF_FILE = $null
+                Ok "Merged hooks into existing settings.json"
+                Ok "Backup saved: settings.json.backup"
             } catch {
-                Warn "Smart merge error - saving reference config instead."
+                $env:EXISTING_FILE = $null
+                $env:MF_FILE = $null
+                Warn "Merge failed - saving reference config instead."
                 Copy-Item $mfSettings (Join-Path $ClaudeDir "settings.memoryforge.json")
                 Ok "Saved reference: .claude\settings.memoryforge.json"
             }
@@ -492,7 +447,9 @@ if ($Global) {
             $env:MF_FILE = $null
             Ok "Added memory server to existing .mcp.json"
         } catch {
-            Warn "Could not merge .mcp.json — saving reference copy"
+            $env:MCP_FILE = $null
+            $env:MF_FILE = $null
+            Warn "Could not merge .mcp.json - saving reference copy"
             Copy-Item $mfMcpJson (Join-Path $TargetDir ".mcp.memoryforge.json")
         }
     }
@@ -511,7 +468,7 @@ if (-not $Global) {
         Dry "Would copy scripts to $TargetDir\scripts\"
     } else {
         New-Item -ItemType Directory -Force -Path (Join-Path $TargetDir "scripts") | Out-Null
-        foreach ($script in @("mcp-memory-server.js", "vector-memory.js", "config-keys.js", "compress-sessions.js", "health-check.js")) {
+        foreach ($script in @("mcp-memory-server.js", "config-keys.js", "compress-sessions.js")) {
             $src = Join-Path $ScriptDir "scripts\$script"
             if (Test-Path $src) {
                 Copy-Item $src (Join-Path $TargetDir "scripts\$script") -Force
@@ -557,33 +514,12 @@ if ($Global) {
 }
 
 # =============================================================================
-# STEP 5: Mind agent
-# =============================================================================
-Step "Installing Mind agent..."
-$agentsDir = Join-Path $ClaudeDir "agents"
-$mindAgent = Join-Path $agentsDir "mind.md"
-
-if (Test-Path $mindAgent) {
-    Skip ".claude\agents\mind.md"
-} else {
-    if ($DryRun) {
-        Dry "Would create .claude\agents\mind.md"
-    } else {
-        New-Item -ItemType Directory -Force -Path $agentsDir | Out-Null
-        Copy-Item "$ScriptDir\.claude\agents\mind.md" $mindAgent
-        Ok "Created .claude\agents\mind.md"
-    }
-}
-
-# =============================================================================
-# STEP 6: .gitignore
+# STEP 5: .gitignore
 # =============================================================================
 Step "Updating .gitignore..."
 
 if ($Global) {
     Ok "Skipped - .gitignore is per-project."
-    Ok "Add to your projects: .mind/.last-activity, .mind/.agent-activity,"
-    Ok ".mind/.task-completions, .mind/.session-tracking, .mind/checkpoints/"
 } else {
     $gitignorePath = Join-Path $TargetDir ".gitignore"
     $entries = @(
@@ -594,11 +530,10 @@ if ($Global) {
         ".mind/.task-completions",
         ".mind/.session-tracking",
         ".mind/.file-tracker",
+        ".mind/.write-lock",
         ".mind/.prompt-context",
         ".mind/.mcp-errors.log",
-        ".mind/.write-lock",
         ".mind/ARCHIVE.md",
-        ".mind/dashboard.html",
         ".mind/checkpoints/",
         "*.pre-compress"
     )
@@ -616,66 +551,7 @@ if ($Global) {
 }
 
 # =============================================================================
-# EXTENSIONS
-# =============================================================================
-
-if ($WithTeam) {
-    Step "Installing Team Memory extension..."
-    foreach ($agent in @("orchestrator.md", "builder.md")) {
-        $dest = Join-Path $agentsDir $agent
-        if (Test-Path $dest) {
-            Skip ".claude\agents\$agent"
-        } else {
-            if ($DryRun) {
-                Dry "Would create .claude\agents\$agent"
-            } else {
-                New-Item -ItemType Directory -Force -Path $agentsDir | Out-Null
-                Copy-Item (Join-Path $ScriptDir "extensions\team-memory\agents\$agent") $dest
-                Ok "Created .claude\agents\$agent"
-            }
-        }
-    }
-}
-
-if ($WithVector) {
-    Step "Installing Vector Memory extension..."
-    if ($Global) {
-        $vectorDir = Join-Path $env:USERPROFILE ".claude\extensions\vector-memory"
-    } else {
-        $vectorDir = Join-Path $TargetDir "extensions\vector-memory"
-    }
-
-    if ($DryRun) {
-        Dry "Would install vector-memory extension to $vectorDir"
-    } else {
-        New-Item -ItemType Directory -Force -Path $vectorDir | Out-Null
-        Copy-Item "$ScriptDir\extensions\vector-memory\README.md" "$vectorDir\README.md" -Force
-        Ok "Installed vector-memory extension"
-        Ok "See $vectorDir\README.md for setup"
-    }
-}
-
-if ($WithGraph) {
-    Step "Installing Graph Memory extension..."
-    if ($Global) {
-        $graphDir = Join-Path $env:USERPROFILE ".claude\extensions\graph-memory"
-    } else {
-        $graphDir = Join-Path $TargetDir "extensions\graph-memory"
-    }
-
-    if ($DryRun) {
-        Dry "Would install graph-memory extension to $graphDir"
-    } else {
-        New-Item -ItemType Directory -Force -Path $graphDir | Out-Null
-        Copy-Item "$ScriptDir\extensions\graph-memory\README.md" "$graphDir\README.md" -Force
-        Copy-Item "$ScriptDir\extensions\graph-memory\docker-compose.yml" "$graphDir\docker-compose.yml" -Force
-        Ok "Installed graph-memory extension"
-        Ok "Run 'docker compose up -d' in $graphDir to start Neo4j"
-    }
-}
-
-# =============================================================================
-# STEP 7: CLAUDE.md — Mind Protocol (default for project-level installs)
+# STEP 6: CLAUDE.md (default for project-level installs)
 # =============================================================================
 if (-not $Global -and -not $NoClaudeMd) {
     Step "Adding Mind Protocol to CLAUDE.md..."
@@ -708,10 +584,7 @@ if (-not $Global -and -not $NoClaudeMd) {
 }
 
 # =============================================================================
-# Summary
-# =============================================================================
-# =============================================================================
-# VERSION TRACKING (Wave 16)
+# VERSION TRACKING
 # =============================================================================
 if (-not $Global) {
     $versionFile = Join-Path $TargetDir ".memoryforge-version"
@@ -735,6 +608,9 @@ if (-not $Global) {
     }
 }
 
+# =============================================================================
+# Summary
+# =============================================================================
 Write-Host ""
 if ($DryRun) {
     Write-Host "  Dry run complete. No files were modified." -ForegroundColor Cyan
@@ -745,17 +621,13 @@ if ($DryRun) {
 Write-Host ""
 
 Write-Host "  Installed:" -ForegroundColor White
-Write-Host "    + 8 hook scripts" -ForegroundColor Green
+Write-Host "    + 3 hook scripts" -ForegroundColor Green
 Write-Host "    + .claude\settings.json (smart-merged if existing)" -ForegroundColor Green
 Write-Host "    + MCP memory server (6 tools for querying/updating .mind/)" -ForegroundColor Green
-Write-Host "    + Mind agent" -ForegroundColor Green
 if (-not $Global) {
     Write-Host "    + .mind\ state files (4 templates)" -ForegroundColor Green
     Write-Host "    + .gitignore entries" -ForegroundColor Green
 }
-if ($WithTeam)   { Write-Host "    + Team agents (orchestrator + builder)" -ForegroundColor Green }
-if ($WithVector) { Write-Host "    + Vector memory extension" -ForegroundColor Green }
-if ($WithGraph)  { Write-Host "    + Graph memory extension (Neo4j)" -ForegroundColor Green }
 if (-not $Global -and -not $NoClaudeMd) { Write-Host "    + Mind Protocol in CLAUDE.md" -ForegroundColor Green }
 
 Write-Host ""

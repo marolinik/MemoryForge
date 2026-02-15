@@ -6,10 +6,9 @@
 //
 // Provides an interactive, friendly experience:
 //   1. Detects your project directory
-//   2. Asks what you want to install
-//   3. Shows clear progress with colored output
-//   4. Explains each step in plain language
-//   5. Validates everything works at the end
+//   2. Shows clear progress with colored output
+//   3. Explains each step in plain language
+//   4. Validates everything works at the end
 //
 // Zero dependencies. Pure Node.js. Works on macOS, Linux, and Windows.
 // =============================================================================
@@ -18,7 +17,7 @@ const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
 
-const VERSION = '1.9.0';
+const VERSION = '2.0.0';
 const SCRIPT_DIR = __dirname;
 
 // --- Colors (auto-detect terminal support) ---
@@ -77,23 +76,6 @@ function askYN(rl, question, defaultYes = true) {
       const a = answer.trim().toLowerCase();
       if (!a) return resolve(defaultYes);
       resolve(a === 'y' || a === 'yes');
-    });
-  });
-}
-
-function askChoice(rl, question, choices) {
-  return new Promise((resolve) => {
-    print(`  ${question}`);
-    for (let i = 0; i < choices.length; i++) {
-      print(`    ${c.cyan}${i + 1}${c.reset}) ${choices[i].label}${choices[i].desc ? ` ${c.dim}— ${choices[i].desc}${c.reset}` : ''}`);
-    }
-    rl.question(`  ${c.dim}Enter number (1-${choices.length}):${c.reset} `, (answer) => {
-      const num = parseInt(answer.trim());
-      if (num >= 1 && num <= choices.length) {
-        resolve(choices[num - 1].value);
-      } else {
-        resolve(choices[0].value); // default to first
-      }
     });
   });
 }
@@ -275,20 +257,11 @@ async function main() {
     }
 
     blank();
-
-    // --- Step 2: Choose what to install ---
-    const mode = await askChoice(rl, `${c.bold}What would you like to install?${c.reset}`, [
-      { label: 'Standard', desc: 'Everything you need to get started', value: 'standard' },
-      { label: 'Standard + Team Agents', desc: 'For teams collaborating on the same project', value: 'team' },
-      { label: 'Minimal', desc: 'Just hooks and MCP server, no CLAUDE.md changes', value: 'minimal' },
-    ]);
-
-    blank();
     print(`${c.bold}  Setting up MemoryForge in: ${c.cyan}${targetDir}${c.reset}`);
     blank();
 
     const claudeDir = path.join(targetDir, '.claude');
-    const totalSteps = mode === 'team' ? 8 : mode === 'minimal' ? 6 : 7;
+    const totalSteps = 6;
     let currentStep = 0;
 
     // --- Step 1: Copy hook scripts ---
@@ -347,14 +320,13 @@ async function main() {
     const mcpJsonPath = path.join(targetDir, '.mcp.json');
     const mfMcpPath = path.join(SCRIPT_DIR, '.mcp.json');
 
-    // Copy MCP server script
+    // Copy MCP server script and supporting scripts
     const scriptsDir = path.join(targetDir, 'scripts');
     ensureDir(scriptsDir);
     const serverDest = path.join(scriptsDir, 'mcp-memory-server.js');
     if (!DRY_RUN) fs.copyFileSync(path.join(SCRIPT_DIR, 'scripts', 'mcp-memory-server.js'), serverDest);
 
-    // Copy supporting scripts
-    for (const support of ['vector-memory.js', 'config-keys.js', 'compress-sessions.js', 'health-check.js']) {
+    for (const support of ['config-keys.js', 'compress-sessions.js']) {
       const src = path.join(SCRIPT_DIR, 'scripts', support);
       if (fs.existsSync(src)) {
         if (!DRY_RUN) fs.copyFileSync(src, path.join(scriptsDir, support));
@@ -391,17 +363,7 @@ async function main() {
       copyIfMissing(src, dest, `.mind/${file}`);
     }
 
-    // --- Step 5: Mind agent ---
-    currentStep++;
-    step(currentStep, totalSteps, 'Installing Mind agent...');
-    const agentsDir = path.join(claudeDir, 'agents');
-    copyIfMissing(
-      path.join(SCRIPT_DIR, '.claude', 'agents', 'mind.md'),
-      path.join(agentsDir, 'mind.md'),
-      'Mind agent'
-    );
-
-    // --- Step 6: .gitignore ---
+    // --- Step 5: .gitignore ---
     currentStep++;
     step(currentStep, totalSteps, 'Updating .gitignore...');
     const gitignorePath = path.join(targetDir, '.gitignore');
@@ -417,7 +379,6 @@ async function main() {
       '.mind/.prompt-context',
       '.mind/.mcp-errors.log',
       '.mind/ARCHIVE.md',
-      '.mind/dashboard.html',
       '.mind/checkpoints/',
       '*.pre-compress',
     ];
@@ -437,48 +398,32 @@ async function main() {
       else success('Created .gitignore');
     }
 
-    // --- Step 7: CLAUDE.md (unless minimal) ---
-    if (mode !== 'minimal') {
-      currentStep++;
-      step(currentStep, totalSteps, 'Adding Mind Protocol to CLAUDE.md...');
-      const claudeMdPath = path.join(targetDir, 'CLAUDE.md');
-      const templatePath = path.join(SCRIPT_DIR, 'templates', 'CLAUDE.md.template');
+    // --- Step 6: CLAUDE.md ---
+    currentStep++;
+    step(currentStep, totalSteps, 'Adding Mind Protocol to CLAUDE.md...');
+    const claudeMdPath = path.join(targetDir, 'CLAUDE.md');
+    const templatePath = path.join(SCRIPT_DIR, 'templates', 'CLAUDE.md.template');
 
-      if (fs.existsSync(templatePath)) {
-        if (fs.existsSync(claudeMdPath)) {
-          const content = fs.readFileSync(claudeMdPath, 'utf-8');
-          if (content.includes('Mind Protocol') || content.includes('MemoryForge') || content.includes('.mind/STATE.md')) {
-            info('CLAUDE.md already has Mind Protocol');
-          } else {
-            if (!DRY_RUN) {
-              const template = fs.readFileSync(templatePath, 'utf-8');
-              fs.appendFileSync(claudeMdPath, '\n\n' + template);
-            }
-            if (DRY_RUN) info('[dry-run] Would append Mind Protocol to CLAUDE.md');
-            else success('Added Mind Protocol to existing CLAUDE.md');
-          }
+    if (fs.existsSync(templatePath)) {
+      if (fs.existsSync(claudeMdPath)) {
+        const content = fs.readFileSync(claudeMdPath, 'utf-8');
+        if (content.includes('Mind Protocol') || content.includes('MemoryForge') || content.includes('.mind/STATE.md')) {
+          info('CLAUDE.md already has Mind Protocol');
         } else {
-          if (!DRY_RUN) fs.copyFileSync(templatePath, claudeMdPath);
-          if (DRY_RUN) info('[dry-run] Would create CLAUDE.md');
-          else success('Created CLAUDE.md with Mind Protocol');
+          if (!DRY_RUN) {
+            const template = fs.readFileSync(templatePath, 'utf-8');
+            fs.appendFileSync(claudeMdPath, '\n\n' + template);
+          }
+          if (DRY_RUN) info('[dry-run] Would append Mind Protocol to CLAUDE.md');
+          else success('Added Mind Protocol to existing CLAUDE.md');
         }
       } else {
-        warn('CLAUDE.md template not found — skipping');
+        if (!DRY_RUN) fs.copyFileSync(templatePath, claudeMdPath);
+        if (DRY_RUN) info('[dry-run] Would create CLAUDE.md');
+        else success('Created CLAUDE.md with Mind Protocol');
       }
-    }
-
-    // --- Step 8: Team agents (if selected) ---
-    if (mode === 'team') {
-      currentStep++;
-      step(currentStep, totalSteps, 'Installing team agents...');
-      for (const agent of ['orchestrator.md', 'builder.md']) {
-        const src = path.join(SCRIPT_DIR, 'extensions', 'team-memory', 'agents', agent);
-        if (fs.existsSync(src)) {
-          copyIfMissing(src, path.join(agentsDir, agent), `Team agent: ${agent}`);
-        } else {
-          warn(`Team agent template not found: ${agent}`);
-        }
-      }
+    } else {
+      warn('CLAUDE.md template not found — skipping');
     }
 
     // --- Version tracking ---
@@ -494,13 +439,7 @@ async function main() {
     print(`    ${c.green}+${c.reset} ${hooksCopied} hook scripts ${c.dim}(auto-fire during Claude Code sessions)${c.reset}`);
     print(`    ${c.green}+${c.reset} MCP memory server ${c.dim}(6 tools for reading/updating project memory)${c.reset}`);
     print(`    ${c.green}+${c.reset} 4 memory files in .mind/ ${c.dim}(STATE, PROGRESS, DECISIONS, SESSION-LOG)${c.reset}`);
-    print(`    ${c.green}+${c.reset} Mind agent ${c.dim}(dedicated state-keeping agent)${c.reset}`);
-    if (mode !== 'minimal') {
-      print(`    ${c.green}+${c.reset} Mind Protocol in CLAUDE.md`);
-    }
-    if (mode === 'team') {
-      print(`    ${c.green}+${c.reset} Team agents (orchestrator + builder)`);
-    }
+    print(`    ${c.green}+${c.reset} Mind Protocol in CLAUDE.md`);
 
     blank();
     print(`  ${c.bold}What happens next:${c.reset}`);

@@ -160,14 +160,7 @@ function memoryStatus() {
   return { content: [{ type: 'text', text: state }] };
 }
 
-// --- Hybrid search: TF-IDF semantic + keyword fallback ---
-
-let vectorMemory = null;
-try {
-  vectorMemory = require('./vector-memory.js');
-} catch {
-  // vector-memory.js not available — keyword-only search
-}
+// --- Keyword search ---
 
 function memorySearch(args) {
   const query = (args.query || '').trim();
@@ -175,30 +168,6 @@ function memorySearch(args) {
     return { content: [{ type: 'text', text: 'Error: query parameter is required.' }], isError: true };
   }
 
-  // If vector memory is available, use hybrid search (semantic + keyword)
-  if (vectorMemory) {
-    try {
-      const results = vectorMemory.hybridSearch(MIND_DIR, query, { limit: 15 });
-
-      if (results.length === 0) {
-        return { content: [{ type: 'text', text: `No results for "${query}" in .mind/ files.` }] };
-      }
-
-      let output = `Search results for "${query}" (${results.length} matches, hybrid semantic+keyword):\n\n`;
-      for (const r of results) {
-        const tag = r.source === 'semantic' ? `[relevance: ${r.score.toFixed(3)}]` : '[exact match]';
-        output += `--- ${r.file}:${r.lineStart} ${tag} ---\n`;
-        output += r.snippet + '\n\n';
-      }
-
-      return { content: [{ type: 'text', text: output }] };
-    } catch (err) {
-      logError('HybridSearchError', err);
-      // Fall through to keyword search
-    }
-  }
-
-  // Keyword-only fallback
   const lowerQuery = query.toLowerCase();
   const files = ['STATE.md', 'PROGRESS.md', 'DECISIONS.md', 'SESSION-LOG.md', 'ARCHIVE.md'];
   const results = [];
@@ -488,7 +457,7 @@ const TOOLS = [
   },
   {
     name: 'memory_search',
-    description: 'Search across all .mind/ files using hybrid semantic + keyword matching. Finds results by meaning (TF-IDF) and exact keywords. Ask natural questions like "What did we decide about authentication?" or search for specific terms.',
+    description: 'Search across all .mind/ files using keyword matching. Search for specific terms or phrases.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -620,7 +589,7 @@ function handleMessage(msg) {
           },
           serverInfo: {
             name: 'memoryforge',
-            version: '1.9.0'
+            version: '2.0.0'
           }
         }
       });

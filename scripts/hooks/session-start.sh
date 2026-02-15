@@ -57,15 +57,7 @@ done
 
 # --- Auto-compress if .mind/ files are large (Wave 3) ---
 # Check total size of .mind/ markdown files (skip checkpoints, tracking files)
-# Read threshold from config if available, otherwise default to 12KB (~3000 tokens)
 COMPRESS_THRESHOLD=12000
-if [ -f "$PROJECT_DIR/.memoryforge.config.json" ] && [ ! -L "$PROJECT_DIR/.memoryforge.config.json" ]; then
-  CONFIG_THRESHOLD=$(MEMORYFORGE_CONFIG="$PROJECT_DIR/.memoryforge.config.json" node -e "
-    try{const c=JSON.parse(require('fs').readFileSync(process.env.MEMORYFORGE_CONFIG,'utf-8'));
-    console.log(c.compressThresholdBytes||12000)}catch{console.log(12000)}
-  " 2>/dev/null || echo "12000")
-  COMPRESS_THRESHOLD="$CONFIG_THRESHOLD"
-fi
 if [ -d "$MIND_DIR" ]; then
   TOTAL_SIZE=0
   for md_file in "$MIND_DIR/STATE.md" "$MIND_DIR/PROGRESS.md" "$MIND_DIR/DECISIONS.md" "$MIND_DIR/SESSION-LOG.md"; do
@@ -101,19 +93,9 @@ const path = require('path');
 const mindDir = process.argv[1];
 const source = process.argv[2];
 
-// Load user config for briefing thresholds
-let cfg = {};
-try {
-  const projectRoot = path.resolve(mindDir, '..');
-  const cfgPath = path.join(projectRoot, '.memoryforge.config.json');
-  try {
-    const st = fs.lstatSync(cfgPath);
-    if (!st.isSymbolicLink() && st.isFile()) cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf-8'));
-  } catch { /* no config file */ }
-} catch {}
-const SESSION_LOG_TAIL = cfg.sessionLogTailLines || 20;
-const RECENT_DECISIONS = cfg.briefingRecentDecisions || 5;
-const MAX_PROGRESS_LINES = cfg.briefingMaxProgressLines || 40;
+const SESSION_LOG_TAIL = 20;
+const RECENT_DECISIONS = 5;
+const MAX_PROGRESS_LINES = 40;
 
 function readFile(filePath) {
   try { return fs.readFileSync(filePath, 'utf-8'); }

@@ -30,9 +30,6 @@ jobs:
       - name: Run compression tests
         run: node tests/compress.test.js
 
-      - name: Run vector memory tests
-        run: node tests/vector-memory.test.js
-
       - name: Run hook integration tests
         run: node tests/hooks.test.js
 
@@ -50,10 +47,6 @@ jobs:
         run: |
           node --check scripts/mcp-memory-server.js
           node --check scripts/compress-sessions.js
-          node --check scripts/dashboard.js
-          node --check scripts/vector-memory.js
-          node --check scripts/fleet-dashboard.js
-          node --check scripts/health-check.js
           node --check scripts/config-keys.js
           node --check setup.js
 
