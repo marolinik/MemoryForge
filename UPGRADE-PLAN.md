@@ -95,5 +95,38 @@ Files to MODIFY:
 
 ---
 
+## Wave 5: Security Hardening (post-audit)
+**Fix P0 security issues found by 5-agent competitive audit.**
+
+Harden `scripts/mcp-memory-server.js`:
+- Path traversal protection via `safePath()` guard on all file operations
+- Replace silent error handlers with `.mcp-errors.log` logging
+- JSON schema validation (required field checks) before tool execution
+- Tool call errors logged to `.mcp-errors.log`
+
+Files to MODIFY:
+- [x] scripts/mcp-memory-server.js — safePath(), logError(), input validation
+- [x] install.sh / install.ps1 — .gitignore includes .mcp-errors.log
+
+---
+
+## Wave 6: README Rewrite (post-audit)
+**Address Beginner (6.0) and Vibe Coder (5.7) feedback.**
+
+Rewrite README.md:
+- Shields.io badges (Zero Deps, Platform, MIT License)
+- "What Is This?" section in plain English
+- Before & After comparison (without vs with MemoryForge)
+- First FAQ answers "Why do I need this?"
+- Competitive analysis linked from docs
+
+Files to MODIFY:
+- [x] README.md — full rewrite with progressive disclosure structure
+
+Files to CREATE:
+- [x] docs/COMPETITIVE-ANALYSIS.md — 9-tool benchmark from 5 perspectives
+
+---
+
 ## Execution Order
-Wave 1 → commit+push → Wave 2 → commit+push → Wave 3 → commit+push → Wave 4 → commit+push
+Wave 1 → Wave 2 → Wave 3 → Wave 4 → Wave 5 → Wave 6 (all complete)

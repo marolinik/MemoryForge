@@ -553,6 +553,7 @@ if ($Global) {
         ".mind/.task-completions",
         ".mind/.session-tracking",
         ".mind/.file-tracker",
+        ".mind/.mcp-errors.log",
         ".mind/dashboard.html",
         ".mind/checkpoints/"
     )

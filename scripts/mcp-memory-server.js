@@ -53,23 +53,32 @@ const MIND_DIR = findMindDir();
 
 // --- File helpers ---
 
-function readMindFile(name) {
+function safePath(name) {
   const filePath = path.join(MIND_DIR, name);
+  const resolved = path.resolve(filePath);
+  if (!resolved.startsWith(path.resolve(MIND_DIR))) {
+    throw new Error('Path traversal blocked: ' + name);
+  }
+  return resolved;
+}
+
+function readMindFile(name) {
   try {
-    return fs.readFileSync(filePath, 'utf-8');
-  } catch {
+    return fs.readFileSync(safePath(name), 'utf-8');
+  } catch (err) {
+    if (err.message.startsWith('Path traversal')) throw err;
     return null;
   }
 }
 
 function writeMindFile(name, content) {
-  const filePath = path.join(MIND_DIR, name);
+  const filePath = safePath(name);
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, content, 'utf-8');
 }
 
 function appendMindFile(name, content) {
-  const filePath = path.join(MIND_DIR, name);
+  const filePath = safePath(name);
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.appendFileSync(filePath, content, 'utf-8');
 }
@@ -459,10 +468,28 @@ function handleMessage(msg) {
         break;
       }
 
+      // Validate required fields against inputSchema
+      const toolDef = TOOLS.find(t => t.name === toolName);
+      if (toolDef && toolDef.inputSchema && toolDef.inputSchema.required) {
+        const missing = toolDef.inputSchema.required.filter(f => !(f in toolArgs));
+        if (missing.length > 0) {
+          send({
+            jsonrpc: '2.0',
+            id,
+            result: {
+              content: [{ type: 'text', text: `Missing required field(s): ${missing.join(', ')}` }],
+              isError: true
+            }
+          });
+          break;
+        }
+      }
+
       try {
         const result = handler(toolArgs);
         send({ jsonrpc: '2.0', id, result });
       } catch (err) {
+        logError('ToolCallError', err);
         send({
           jsonrpc: '2.0',
           id,
@@ -524,6 +551,16 @@ process.stdin.on('data', (chunk) => {
 
 process.stdin.on('end', () => process.exit(0));
 
-// Prevent unhandled errors from crashing the server
-process.on('uncaughtException', () => {});
-process.on('unhandledRejection', () => {});
+// Log unhandled errors instead of silently swallowing them
+function logError(label, err) {
+  try {
+    const logPath = path.join(MIND_DIR, '.mcp-errors.log');
+    const ts = new Date().toISOString();
+    const msg = err && err.stack ? err.stack : String(err);
+    fs.appendFileSync(logPath, `[${ts}] ${label}: ${msg}\n`);
+  } catch {
+    // Cannot log — ignore to prevent infinite loop
+  }
+}
+process.on('uncaughtException', (err) => logError('UncaughtException', err));
+process.on('unhandledRejection', (err) => logError('UnhandledRejection', err));
