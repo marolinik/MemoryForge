@@ -1,0 +1,41 @@
+// =============================================================================
+// MemoryForge Configuration
+// =============================================================================
+// Copy this file to your project root as `.memoryforge.config.js` to customize.
+// All values below are defaults — only override what you need.
+// =============================================================================
+
+module.exports = {
+  // -- Compression --
+  // How many recent sessions to keep in full (older ones get 1-line summaries)
+  keepSessionsFull: 5,
+
+  // How many recent decisions to keep in full (older ones get 2-line summaries)
+  keepDecisionsFull: 10,
+
+  // Archive completed tasks from PROGRESS.md after this many days
+  archiveAfterDays: 30,
+
+  // Max entries to keep in tracking files (.agent-activity, .task-completions, etc.)
+  trackingMaxLines: 100,
+
+  // Auto-compress when total .mind/ markdown files exceed this byte size (~3000 tokens)
+  compressThresholdBytes: 12000,
+
+  // -- Briefing --
+  // Max lines from SESSION-LOG.md to include in the session-start briefing
+  sessionLogTailLines: 20,
+
+  // Max recent decisions to show in the session-start briefing
+  briefingRecentDecisions: 5,
+
+  // Max lines from PROGRESS.md to include in the briefing
+  briefingMaxProgressLines: 40,
+
+  // -- Checkpoints --
+  // Max number of timestamped compact-*.md checkpoint files to keep
+  maxCheckpointFiles: 10,
+
+  // Warn about stale STATE.md after this many seconds (1800 = 30 min)
+  staleWarningSeconds: 1800,
+};

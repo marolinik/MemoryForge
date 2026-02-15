@@ -554,8 +554,10 @@ if ($Global) {
         ".mind/.session-tracking",
         ".mind/.file-tracker",
         ".mind/.mcp-errors.log",
+        ".mind/ARCHIVE.md",
         ".mind/dashboard.html",
-        ".mind/checkpoints/"
+        ".mind/checkpoints/",
+        "*.pre-compress"
     )
 
     if ((Test-Path $gitignorePath) -and ((Get-Content $gitignorePath -Raw) -match "MemoryForge")) {

@@ -128,5 +128,50 @@ Files to CREATE:
 
 ---
 
+## Wave 7: Growth Management (post-audit)
+**Handle .mind/ growth at scale — task archival, tracking rotation, smarter compression.**
+
+Enhance `scripts/compress-sessions.js`:
+- Archive completed tasks older than 30 days from PROGRESS.md → ARCHIVE.md
+- Rotate tracking files (.agent-activity, .task-completions, .session-tracking) to last 100 entries
+- Smarter decision compression: keep rationale in 2-line format (title + "Why: ...")
+- Unified report output covering all compression + archival + rotation
+
+Files to MODIFY:
+- [x] scripts/compress-sessions.js — archiveCompletedTasks(), rotateTrackingFile(), rationale preservation
+
+---
+
+## Wave 8: Configuration File (post-audit)
+**Let users customize thresholds without editing hook scripts.**
+
+Create `.memoryforge.config.js` template with all configurable thresholds.
+Wire config loading into compress-sessions.js, session-start.sh, stop-checkpoint.sh.
+
+Files to CREATE:
+- [x] templates/memoryforge.config.js.template — all defaults documented
+
+Files to MODIFY:
+- [x] scripts/compress-sessions.js — load config, override defaults
+- [x] scripts/hooks/session-start.sh — read compressThresholdBytes, briefing thresholds
+- [x] scripts/hooks/stop-checkpoint.sh — read staleWarningSeconds
+- [x] install.sh / install.ps1 — gitignore ARCHIVE.md + *.pre-compress
+
+---
+
+## Wave 9: Progressive Briefings (post-audit)
+**Save context tokens on large projects with 2-layer briefing.**
+
+Enhance `scripts/hooks/session-start.sh`:
+- When .mind/ total > 8KB: compact briefing (STATE.md + in-progress + blocked only)
+- When .mind/ total ≤ 8KB: full briefing (all files, current behavior)
+- Post-compaction: always full briefing (need max context recovery)
+- Compact mode includes MCP tool tip: "Use memory_search() for full details"
+
+Files to MODIFY:
+- [x] scripts/hooks/session-start.sh — progressive briefing logic
+
+---
+
 ## Execution Order
-Wave 1 → Wave 2 → Wave 3 → Wave 4 → Wave 5 → Wave 6 (all complete)
+Wave 1 → Wave 2 → Wave 3 → Wave 4 → Wave 5 → Wave 6 → Wave 7 → Wave 8 → Wave 9 (all complete)

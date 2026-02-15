@@ -197,8 +197,36 @@ node scripts/compress-sessions.js --dry-run .mind/  # preview only
 ```
 
 - Keeps last 5 sessions in full, summarizes older to 1 line
-- Keeps last 10 decisions in full, archives older to 1 line
+- Keeps last 10 decisions in full, summarizes older to 2 lines (title + rationale)
+- Archives completed tasks older than 30 days to `ARCHIVE.md`
+- Rotates tracking files (`.agent-activity`, `.task-completions`) to last 100 entries
 - Auto-triggered on session start when `.mind/` exceeds ~3000 tokens
+
+### Progressive Briefings
+
+For large projects, the session-start hook automatically switches to a compact briefing (~200 tokens) that includes only the current state, in-progress tasks, and blockers. Full details are available via MCP tools (`memory_status`, `memory_search`). Post-compaction briefings always use the full format to maximize context recovery.
+
+### Configuration
+
+Copy the config template to your project root to customize thresholds:
+
+```bash
+cp MemoryForge/templates/memoryforge.config.js.template your-project/.memoryforge.config.js
+```
+
+All settings have sensible defaults — only override what you need:
+
+| Setting | Default | What It Controls |
+|:---|:---:|:---|
+| `keepSessionsFull` | 5 | Recent sessions kept in full |
+| `keepDecisionsFull` | 10 | Recent decisions kept in full |
+| `archiveAfterDays` | 30 | Days before completed tasks are archived |
+| `trackingMaxLines` | 100 | Max entries in tracking files |
+| `compressThresholdBytes` | 12000 | Auto-compress trigger (~3000 tokens) |
+| `staleWarningSeconds` | 1800 | Warn about stale STATE.md (30 min) |
+| `sessionLogTailLines` | 20 | Session log lines in briefing |
+| `briefingRecentDecisions` | 5 | Decisions shown in briefing |
+| `briefingMaxProgressLines` | 40 | Progress lines in briefing |
 
 ---
 

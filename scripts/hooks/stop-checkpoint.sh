@@ -70,7 +70,15 @@ if command -v git &>/dev/null && git -C "$PROJECT_DIR" rev-parse --is-inside-wor
   rm -f "$TRACKER.tmp"
 fi
 
-# Output a minimal context nudge if STATE.md is stale (>30 min)
+# Output a minimal context nudge if STATE.md is stale (>30 min by default)
+STALE_SECONDS=1800
+if [ -f "$PROJECT_DIR/.memoryforge.config.js" ]; then
+  STALE_SECONDS=$(node -e "
+    try{const c=require('$PROJECT_DIR/.memoryforge.config.js');
+    console.log(c.staleWarningSeconds||1800)}catch{console.log(1800)}
+  " 2>/dev/null || echo "1800")
+fi
+
 if [ -f "$MIND_DIR/STATE.md" ]; then
   STATE_AGE=0
   if command -v stat &>/dev/null; then
@@ -79,7 +87,7 @@ if [ -f "$MIND_DIR/STATE.md" ]; then
     STATE_AGE=$(( NOW - STATE_MOD ))
   fi
 
-  if [ "$STATE_AGE" -gt 1800 ]; then
+  if [ "$STATE_AGE" -gt "$STALE_SECONDS" ]; then
     node -e "
       console.log(JSON.stringify({
         hookSpecificOutput: {

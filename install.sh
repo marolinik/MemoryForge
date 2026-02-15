@@ -606,8 +606,10 @@ else
     ".mind/.session-tracking"
     ".mind/.file-tracker"
     ".mind/.mcp-errors.log"
+    ".mind/ARCHIVE.md"
     ".mind/dashboard.html"
     ".mind/checkpoints/"
+    "*.pre-compress"
   )
 
   if [ -f "$GITIGNORE" ] && grep -qF "MemoryForge" "$GITIGNORE" 2>/dev/null; then
