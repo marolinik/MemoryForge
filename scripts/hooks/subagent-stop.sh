@@ -19,37 +19,29 @@ TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
 mkdir -p "$MIND_DIR"
 
-# Parse stdin
+# Parse stdin and produce output in a single Node.js invocation
 INPUT=$(cat)
-AGENT_INFO=$(echo "$INPUT" | node -e "
+echo "$INPUT" | MIND_DIR="$MIND_DIR" TIMESTAMP="$TIMESTAMP" node -e "
+  const fs = require('fs');
   let d='';process.stdin.on('data',c=>d+=c);
   process.stdin.on('end',()=>{
+    let type='unknown', id='unknown';
     try {
       const j=JSON.parse(d);
-      console.log(JSON.stringify({
-        type: j.agent_type||'unknown',
-        id: j.agent_id||'unknown',
-        transcript: j.agent_transcript_path||''
-      }));
-    } catch { console.log('{\"type\":\"unknown\",\"id\":\"unknown\",\"transcript\":\"\"}'); }
-  })
-" 2>/dev/null || echo '{"type":"unknown","id":"unknown","transcript":""}')
-
-AGENT_TYPE=$(echo "$AGENT_INFO" | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>console.log(JSON.parse(d).type))" 2>/dev/null || echo "unknown")
-AGENT_ID=$(echo "$AGENT_INFO" | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>console.log(JSON.parse(d).id))" 2>/dev/null || echo "unknown")
-
-# Log to agent activity tracker
-echo "[$TIMESTAMP] STOPPED: $AGENT_TYPE ($AGENT_ID)" >> "$MIND_DIR/.agent-activity"
-
-# Output context about agent completion
-node -e "
-const type = process.argv[1];
-const id = process.argv[2];
-const context = '[Memory] Agent completed: ' + type + ' (' + id + '). Check task status and update .mind/PROGRESS.md if work was completed.';
-console.log(JSON.stringify({
-  hookSpecificOutput: {
-    hookEventName: 'SubagentStop',
-    additionalContext: context
-  }
-}));
-" "$AGENT_TYPE" "$AGENT_ID"
+      type = j.agent_type||'unknown';
+      id = j.agent_id||'unknown';
+    } catch {}
+    // Log to agent activity tracker
+    const mindDir = process.env.MIND_DIR;
+    const ts = process.env.TIMESTAMP;
+    try { fs.appendFileSync(mindDir + '/.agent-activity', '[' + ts + '] STOPPED: ' + type + ' (' + id + ')\n'); } catch {}
+    // Output context
+    const context = '[Memory] Agent completed: ' + type + ' (' + id + '). Check task status and update .mind/PROGRESS.md if work was completed.';
+    console.log(JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: 'SubagentStop',
+        additionalContext: context
+      }
+    }));
+  });
+" 2>/dev/null || echo '{}'

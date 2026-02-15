@@ -72,9 +72,9 @@ fi
 
 # Output a minimal context nudge if STATE.md is stale (>30 min by default)
 STALE_SECONDS=1800
-if [ -f "$PROJECT_DIR/.memoryforge.config.json" ]; then
-  STALE_SECONDS=$(node -e "
-    try{const c=JSON.parse(require('fs').readFileSync('$PROJECT_DIR/.memoryforge.config.json','utf-8'));
+if [ -f "$PROJECT_DIR/.memoryforge.config.json" ] && [ ! -L "$PROJECT_DIR/.memoryforge.config.json" ]; then
+  STALE_SECONDS=$(MEMORYFORGE_CONFIG="$PROJECT_DIR/.memoryforge.config.json" node -e "
+    try{const c=JSON.parse(require('fs').readFileSync(process.env.MEMORYFORGE_CONFIG,'utf-8'));
     console.log(c.staleWarningSeconds||1800)}catch{console.log(1800)}
   " 2>/dev/null || echo "1800")
 fi
@@ -83,19 +83,23 @@ if [ -f "$MIND_DIR/STATE.md" ]; then
   STATE_AGE=0
   if command -v stat &>/dev/null; then
     STATE_MOD=$(stat -c %Y "$MIND_DIR/STATE.md" 2>/dev/null || stat -f %m "$MIND_DIR/STATE.md" 2>/dev/null || echo "0")
+    # Validate stat output is numeric (Bug #9)
+    case "$STATE_MOD" in ''|*[!0-9]*) STATE_MOD=0 ;; esac
     NOW=$(date +%s)
     STATE_AGE=$(( NOW - STATE_MOD ))
   fi
 
   if [ "$STATE_AGE" -gt "$STALE_SECONDS" ]; then
+    STALE_MINUTES=$(( STALE_SECONDS / 60 ))
     node -e "
+      const mins = process.argv[1];
       console.log(JSON.stringify({
         hookSpecificOutput: {
           hookEventName: 'Stop',
-          additionalContext: '[Memory] Reminder: .mind/STATE.md has not been updated in 30+ minutes. If significant work was done, update .mind/ files to preserve progress.'
+          additionalContext: '[Memory] Reminder: .mind/STATE.md has not been updated in ' + mins + '+ minutes. If significant work was done, update .mind/ files to preserve progress.'
         }
       }));
-    "
+    " "$STALE_MINUTES"
   else
     echo '{}'
   fi

@@ -19,23 +19,21 @@ TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
 mkdir -p "$MIND_DIR"
 
-# Parse stdin
-INPUT=$(cat)
-AGENT_INFO=$(echo "$INPUT" | node -e "
+# Parse stdin and log in a single Node invocation
+MIND_DIR="$MIND_DIR" TIMESTAMP="$TIMESTAMP" node -e "
   let d='';process.stdin.on('data',c=>d+=c);
   process.stdin.on('end',()=>{
+    const fs=require('fs');
+    const path=require('path');
     try {
       const j=JSON.parse(d);
-      console.log((j.agent_type||'unknown') + '|' + (j.agent_id||'unknown'));
-    } catch { console.log('unknown|unknown'); }
+      const type=j.agent_type||'unknown';
+      const id=j.agent_id||'unknown';
+      const ts=process.env.TIMESTAMP;
+      const mindDir=process.env.MIND_DIR;
+      const line='['+ts+'] STARTED: '+type+' ('+id+')\n';
+      fs.appendFileSync(path.join(mindDir,'.agent-activity'),line);
+    } catch {}
+    console.log('{}');
   })
-" 2>/dev/null || echo "unknown|unknown")
-
-AGENT_TYPE=$(echo "$AGENT_INFO" | cut -d'|' -f1)
-AGENT_ID=$(echo "$AGENT_INFO" | cut -d'|' -f2)
-
-# Log to agent activity tracker
-echo "[$TIMESTAMP] STARTED: $AGENT_TYPE ($AGENT_ID)" >> "$MIND_DIR/.agent-activity"
-
-# Output empty — no context injection needed for subagent start
-echo '{}'
+" < /dev/stdin || echo '{}'

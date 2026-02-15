@@ -15,7 +15,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { execSync } = require('child_process');
+const { execFileSync } = require('child_process');
 
 const args = process.argv.slice(2);
 const noOpen = args.includes('--no-open');
@@ -87,15 +87,34 @@ function getProjectStatus(project) {
   const lastUpdatedMatch = state && state.match(/## Last Updated\n(.+)/);
   const lastUpdated = lastUpdatedMatch ? lastUpdatedMatch[1].trim() : 'Unknown';
 
-  // .mind/ size
+  // .mind/ size (recursive to include checkpoints/ and other subdirs)
   let totalSize = 0;
-  try {
-    const files = fs.readdirSync(project.mindDir);
-    for (const f of files) {
-      const st = fs.statSync(path.join(project.mindDir, f));
-      if (st.isFile()) totalSize += st.size;
-    }
-  } catch { /* ignore */ }
+  function calcDirSize(dir) {
+    try {
+      const entries = fs.readdirSync(dir);
+      for (const f of entries) {
+        const fp = path.join(dir, f);
+        const st = fs.lstatSync(fp);
+        if (st.isSymbolicLink()) continue; // skip symlinks
+        if (st.isFile()) totalSize += st.size;
+        else if (st.isDirectory()) calcDirSize(fp);
+      }
+    } catch { /* ignore */ }
+  }
+  calcDirSize(project.mindDir);
+
+  // Detect stale projects — warn if not updated in >7 days (Bug #5)
+  let stale = false;
+  let staleDays = 0;
+  if (lastUpdated && lastUpdated !== 'Unknown') {
+    try {
+      const updated = new Date(lastUpdated);
+      if (!isNaN(updated.getTime())) {
+        staleDays = Math.floor((Date.now() - updated.getTime()) / (1000 * 60 * 60 * 24));
+        stale = staleDays > 7;
+      }
+    } catch { /* ignore parse errors */ }
+  }
 
   return {
     ...project,
@@ -109,6 +128,8 @@ function getProjectStatus(project) {
     sessions: sessCount,
     lastUpdated,
     mindSize: totalSize,
+    stale,
+    staleDays,
   };
 }
 
@@ -138,7 +159,7 @@ function generateHtml(projects) {
         <td class="num">${p.decisions}</td>
         <td class="num">${p.sessions}</td>
         <td class="num">${(p.mindSize / 1024).toFixed(1)} KB</td>
-        <td class="date">${escapeHtml(p.lastUpdated)}</td>
+        <td class="date">${p.stale ? `<span class="stale-badge" title="${p.staleDays} days ago">&#9888; ${escapeHtml(p.lastUpdated)}</span>` : escapeHtml(p.lastUpdated)}</td>
       </tr>`;
   }).join('\n');
 
@@ -175,6 +196,7 @@ function generateHtml(projects) {
   .bar-inner { height: 100%; border-radius: 4px; transition: width 0.3s; }
   .pct { font-size: 0.8rem; color: #94a3b8; margin-left: 0.5rem; }
   .empty { text-align: center; padding: 3rem; color: #64748b; }
+  .stale-badge { color: #f59e0b; font-weight: 500; }
   .footer { text-align: center; margin-top: 2rem; color: #475569; font-size: 0.75rem; }
 </style>
 </head>
@@ -251,10 +273,13 @@ console.log(`Found ${projects.length} project(s) with .mind/ directories.`);
 if (!noOpen) {
   try {
     const platform = process.platform;
-    if (platform === 'darwin') execSync(`open "${outputPath}"`);
-    else if (platform === 'win32') execSync(`start "" "${outputPath}"`);
-    else execSync(`xdg-open "${outputPath}"`);
+    if (platform === 'darwin') execFileSync('open', [outputPath]);
+    else if (platform === 'win32') execFileSync('cmd', ['/c', 'start', '', outputPath]);
+    else execFileSync('xdg-open', [outputPath]);
   } catch {
-    console.log('Could not auto-open browser. Open the file manually.');
+    console.log('Could not auto-open browser automatically.');
+    console.log('Open this file in your browser:');
+    console.log(`  file://${outputPath}`);
+    console.log('Or use: --no-open flag to suppress this message.');
   }
 }

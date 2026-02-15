@@ -96,7 +96,7 @@ cat .mind/checkpoints/latest.md
 
 **Cause:** STATE.md doesn't follow the expected format
 
-**Fix:** Ensure STATE.md has this structure (note: content must be on the line directly after the heading):
+**Fix:** Ensure STATE.md has this structure. Content can be on the line directly after the heading, or separated by a blank line — both work:
 ```markdown
 ## Current Phase
 Phase 1: Setup — IN PROGRESS
@@ -107,6 +107,8 @@ Implement the database layer
 ## Blocked Items
 None
 ```
+
+> **Note:** The `user-prompt-context` hook uses `grep -A 3` with blank-line filtering, so both `## Heading\nContent` and `## Heading\n\nContent` (with a blank line) are supported. The project templates may use either style — both are valid.
 
 ### 7. Too much context injected (slowing down)
 
@@ -139,6 +141,33 @@ None
   }
 }
 ```
+
+### 9. setup.js fails or shows warnings
+
+**Symptom:** `node setup.js` exits early, shows "clone directory" warning, or skips steps
+
+**Causes:**
+- Running from the MemoryForge repo itself instead of your project directory
+- Node.js version too old (requires 14+)
+- Permission errors when creating files
+
+**Fix:**
+```bash
+# Make sure you're in YOUR project directory, not the MemoryForge clone
+cd /path/to/my-project
+node /path/to/MemoryForge/setup.js
+
+# Preview what would happen without writing anything
+node /path/to/MemoryForge/setup.js --dry-run
+
+# Show usage help
+node /path/to/MemoryForge/setup.js --help
+
+# Check Node.js version (18+ required)
+node --version
+```
+
+> **Note:** If you see "You appear to be inside the MemoryForge clone directory", change to your target project directory first. The installer installs *into* the current directory.
 
 ## Verifying Installation
 

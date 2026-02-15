@@ -25,6 +25,8 @@ const path = require('path');
 // --- Constants ---
 
 const MAX_INPUT_SIZE = 50 * 1024; // 50KB limit per tool call
+const MAX_FIELD_SIZE = 5 * 1024; // 5KB limit per individual string field (Bug #12)
+const MAX_MESSAGE_SIZE = 10 * 1024 * 1024; // 10MB cap on Content-Length to prevent OOM
 
 // --- Find .mind/ directory ---
 
@@ -68,23 +70,84 @@ function safePath(name) {
 
 function readMindFile(name) {
   try {
-    return fs.readFileSync(safePath(name), 'utf-8');
+    const filePath = safePath(name);
+    // Reject symlinks inside .mind/ to prevent reading outside the boundary
+    const stat = fs.lstatSync(filePath);
+    if (stat.isSymbolicLink()) return null;
+    return fs.readFileSync(filePath, 'utf-8');
   } catch (err) {
     if (err.message.startsWith('Path traversal')) throw err;
     return null;
   }
 }
 
+// --- Advisory file locking for concurrent access (Bug #1) ---
+const LOCK_PATH = path.join(MIND_DIR, '.write-lock');
+const LOCK_STALE_MS = 30000; // 30s — consider lock stale after this
+
+function acquireLock() {
+  try {
+    // Check for stale lock (>30s old)
+    try {
+      const stat = fs.statSync(LOCK_PATH);
+      if (Date.now() - stat.mtimeMs > LOCK_STALE_MS) {
+        fs.unlinkSync(LOCK_PATH);
+      }
+    } catch { /* no lock file — good */ }
+    fs.writeFileSync(LOCK_PATH, String(process.pid), { flag: 'wx' });
+    return true;
+  } catch {
+    logError('LockContention', new Error('Could not acquire .mind/.write-lock — concurrent write detected'));
+    return false;
+  }
+}
+
+function releaseLock() {
+  try { fs.unlinkSync(LOCK_PATH); } catch { /* already released */ }
+}
+
 function writeMindFile(name, content) {
   const filePath = safePath(name);
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, content, 'utf-8');
+  const locked = acquireLock();
+  try {
+    // Atomic write: write to temp file then rename (prevents partial writes / TOCTOU)
+    const tmpPath = filePath + '.tmp.' + process.pid;
+    fs.writeFileSync(tmpPath, content, 'utf-8');
+    fs.renameSync(tmpPath, filePath);
+  } finally {
+    if (locked) releaseLock();
+  }
+  return { contention: !locked };
 }
 
 function appendMindFile(name, content) {
   const filePath = safePath(name);
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.appendFileSync(filePath, content, 'utf-8');
+  const locked = acquireLock();
+  try {
+    // Atomic append: read existing + append + tmp + rename (matches writeMindFile pattern)
+    let existing = '';
+    try { existing = fs.readFileSync(filePath, 'utf-8'); } catch { /* new file */ }
+    const tmpPath = filePath + '.tmp.' + process.pid;
+    fs.writeFileSync(tmpPath, existing + content, 'utf-8');
+    fs.renameSync(tmpPath, filePath);
+  } finally {
+    if (locked) releaseLock();
+  }
+  return { contention: !locked };
+}
+
+// --- Lock contention warning helper (Bug #4) ---
+
+const CONTENTION_WARNING = '\n\n⚠ Warning: Could not acquire write lock — another process may be writing to .mind/ concurrently. Data was written but may conflict with concurrent changes.';
+
+function withContentionWarning(result, contention) {
+  if (contention && result.content && result.content[0]) {
+    const text = result.content[0].text + CONTENTION_WARNING;
+    return { content: [{ type: 'text', text }], isError: result.isError };
+  }
+  return result;
 }
 
 // --- Tool implementations ---
@@ -210,9 +273,12 @@ function memoryUpdateState(args) {
     content += `## Blocked Items\n${updates['Blocked Items'] || 'None'}\n\n`;
     content += `## Next Action\n${updates['Next Action'] || 'Not set'}\n\n`;
     content += `## Last Updated\n${now}\n`;
-    writeMindFile('STATE.md', content);
+    const { contention } = writeMindFile('STATE.md', content);
     const phase = updates['Current Phase'] || 'Not set';
-    return { content: [{ type: 'text', text: `STATE.md created. Phase: ${phase}` }] };
+    return withContentionWarning(
+      { content: [{ type: 'text', text: `STATE.md created. Phase: ${phase}` }] },
+      contention
+    );
   }
 
   // Parse existing file into ordered sections: [{heading: string|null, body: string}]
@@ -257,10 +323,13 @@ function memoryUpdateState(args) {
     }
   }
 
-  const result = output.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n';
-  writeMindFile('STATE.md', result);
+  const finalContent = output.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n';
+  const { contention } = writeMindFile('STATE.md', finalContent);
   const phase = args.phase || extractSection(existing, 'Current Phase') || 'unchanged';
-  return { content: [{ type: 'text', text: `STATE.md updated. Phase: ${phase}` }] };
+  return withContentionWarning(
+    { content: [{ type: 'text', text: `STATE.md updated. Phase: ${phase}` }] },
+    contention
+  );
 }
 
 function memorySaveDecision(args) {
@@ -286,8 +355,11 @@ function memorySaveDecision(args) {
     `- **Rationale:** ${args.rationale || 'Not specified'}\n` +
     `- **Status:** ${args.status || 'Final'}\n\n`;
 
-  appendMindFile('DECISIONS.md', entry);
-  return { content: [{ type: 'text', text: `Decision ${nextId} saved: ${args.title}` }] };
+  const { contention } = appendMindFile('DECISIONS.md', entry);
+  return withContentionWarning(
+    { content: [{ type: 'text', text: `Decision ${nextId} saved: ${args.title}` }] },
+    contention
+  );
 }
 
 function memorySaveProgress(args) {
@@ -303,8 +375,11 @@ function memorySaveProgress(args) {
     if (existing.includes(exactPattern)) {
       const now = new Date().toISOString().split('T')[0];
       const updated = existing.replace(exactPattern, `- [x] ${args.task} (completed ${now})`);
-      writeMindFile('PROGRESS.md', updated);
-      return { content: [{ type: 'text', text: `Marked complete: ${args.task}` }] };
+      const { contention } = writeMindFile('PROGRESS.md', updated);
+      return withContentionWarning(
+        { content: [{ type: 'text', text: `Marked complete: ${args.task}` }] },
+        contention
+      );
     }
 
     // Fuzzy match: case-insensitive substring on unchecked tasks
@@ -315,8 +390,11 @@ function memorySaveProgress(args) {
       if (m && m[2].toLowerCase().includes(needle)) {
         const now = new Date().toISOString().split('T')[0];
         lines[i] = `${m[1]}[x] ${m[2]} (completed ${now})`;
-        writeMindFile('PROGRESS.md', lines.join('\n'));
-        return { content: [{ type: 'text', text: `Marked complete: ${m[2]}` }] };
+        const { contention } = writeMindFile('PROGRESS.md', lines.join('\n'));
+        return withContentionWarning(
+          { content: [{ type: 'text', text: `Marked complete: ${m[2]}` }] },
+          contention
+        );
       }
     }
 
@@ -329,16 +407,22 @@ function memorySaveProgress(args) {
     const checkbox = args.completed ? '[x]' : '[ ]';
     const entry = `- ${checkbox} ${args.task}\n`;
 
+    // Escape regex special chars in section name to prevent ReDoS (Bug #3)
+    const escapedSection = section.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     // Try to find the section and append
-    const sectionPattern = new RegExp(`(### ${section}[^\n]*\n)`, 'i');
+    let contention = false;
+    const sectionPattern = new RegExp(`(### ${escapedSection}[^\n]*\n)`, 'i');
     if (sectionPattern.test(existing)) {
       const updated = existing.replace(sectionPattern, `$1${entry}`);
-      writeMindFile('PROGRESS.md', updated);
+      ({ contention } = writeMindFile('PROGRESS.md', updated));
     } else {
       // Append new section
-      appendMindFile('PROGRESS.md', `\n### ${section}\n${entry}`);
+      ({ contention } = appendMindFile('PROGRESS.md', `\n### ${section}\n${entry}`));
     }
-    return { content: [{ type: 'text', text: `Added to ${section}: ${args.task}` }] };
+    return withContentionWarning(
+      { content: [{ type: 'text', text: `Added to ${section}: ${args.task}` }] },
+      contention
+    );
   }
 
   return { content: [{ type: 'text', text: `Task updated: ${args.task}` }] };
@@ -368,14 +452,20 @@ function memorySaveSession(args) {
   if (args.next) entry += `- **Next session:** ${args.next}\n`;
   entry += '\n';
 
-  appendMindFile('SESSION-LOG.md', entry);
-  return { content: [{ type: 'text', text: `Session ${nextNum} logged.` }] };
+  const { contention } = appendMindFile('SESSION-LOG.md', entry);
+  return withContentionWarning(
+    { content: [{ type: 'text', text: `Session ${nextNum} logged.` }] },
+    contention
+  );
 }
 
 // --- Section extraction helpers ---
 
 function extractSection(content, heading) {
-  const regex = new RegExp(`## ${heading}\\s*\\n([\\s\\S]*?)(?=\\n## |$)`, 'i');
+  // Length limit on heading to prevent ReDoS from extremely long section names (Bug #4)
+  const safeHeading = String(heading).substring(0, 200);
+  const escapedHeading = safeHeading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const regex = new RegExp(`## ${escapedHeading}\\s*\\n([\\s\\S]*?)(?=\\n## |$)`, 'i');
   const match = content.match(regex);
   return match ? match[1].trim() : null;
 }
@@ -530,7 +620,7 @@ function handleMessage(msg) {
           },
           serverInfo: {
             name: 'memoryforge',
-            version: '1.1.0'
+            version: '1.9.0'
           }
         }
       });
@@ -563,16 +653,54 @@ function handleMessage(msg) {
 
       // Input size limit — prevent disk/memory exhaustion
       const inputStr = JSON.stringify(toolArgs);
-      if (inputStr.length > MAX_INPUT_SIZE) {
+      const inputBytes = Buffer.byteLength(inputStr, 'utf-8');
+      if (inputBytes > MAX_INPUT_SIZE) {
         send({
           jsonrpc: '2.0',
           id,
           result: {
-            content: [{ type: 'text', text: `Input too large (${inputStr.length} chars, max ${MAX_INPUT_SIZE}). Reduce input size.` }],
+            content: [{ type: 'text', text: `Input too large (${inputBytes} bytes, max ${MAX_INPUT_SIZE}). Reduce input size.` }],
             isError: true
           }
         });
         break;
+      }
+
+      // Per-field string length limit (Bug #12)
+      {
+        let fieldError = null;
+        for (const [key, val] of Object.entries(toolArgs)) {
+          if (typeof val === 'string') {
+            const bytes = Buffer.byteLength(val, 'utf-8');
+            if (bytes > MAX_FIELD_SIZE) {
+              fieldError = `Field "${key}" too large (${bytes} bytes, max ${MAX_FIELD_SIZE} per field). Reduce field size.`;
+              break;
+            }
+          }
+          if (Array.isArray(val)) {
+            for (const item of val) {
+              if (typeof item === 'string') {
+                const bytes = Buffer.byteLength(item, 'utf-8');
+                if (bytes > MAX_FIELD_SIZE) {
+                  fieldError = `Array item in "${key}" too large (${bytes} bytes, max ${MAX_FIELD_SIZE} per field). Reduce field size.`;
+                  break;
+                }
+              }
+            }
+            if (fieldError) break;
+          }
+        }
+        if (fieldError) {
+          send({
+            jsonrpc: '2.0',
+            id,
+            result: {
+              content: [{ type: 'text', text: fieldError }],
+              isError: true
+            }
+          });
+          break;
+        }
       }
 
       // Validate required fields against inputSchema
@@ -639,6 +767,13 @@ process.stdin.on('data', (chunk) => {
     const contentLength = parseInt(match[1]);
     const bodyStart = headerEnd + 4;
 
+    // Reject oversized messages to prevent OOM (Bug #2)
+    if (contentLength > MAX_MESSAGE_SIZE) {
+      logError('OversizedMessage', new Error(`Content-Length ${contentLength} exceeds max ${MAX_MESSAGE_SIZE}`));
+      rawBuffer = rawBuffer.subarray(headerEnd + 4);
+      continue;
+    }
+
     // Not enough data yet
     if (rawBuffer.length - bodyStart < contentLength) break;
 
@@ -658,9 +793,12 @@ process.stdin.on('data', (chunk) => {
 process.stdin.on('end', () => process.exit(0));
 
 // Log unhandled errors instead of silently swallowing them
+const MAX_ERROR_LOG_SIZE = 512 * 1024; // 512KB per-session cap
 function logError(label, err) {
   try {
     const logPath = path.join(MIND_DIR, '.mcp-errors.log');
+    // Skip logging if error log already too large (prevents unbounded growth in single session)
+    try { if (fs.statSync(logPath).size > MAX_ERROR_LOG_SIZE) return; } catch { /* file doesn't exist yet */ }
     const ts = new Date().toISOString();
     const msg = err && err.stack ? err.stack : String(err);
     fs.appendFileSync(logPath, `[${ts}] ${label}: ${msg}\n`);

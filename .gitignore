@@ -3,7 +3,14 @@
 .mind/.agent-activity
 .mind/.task-completions
 .mind/.session-tracking
+.mind/.file-tracker
+.mind/.prompt-context
+.mind/.mcp-errors.log
+.mind/.write-lock
+.mind/ARCHIVE.md
+.mind/dashboard.html
 .mind/checkpoints/
+*.pre-compress
 
 # OS files
 .DS_Store
@@ -16,3 +23,5 @@ desktop.ini
 *~
 .vscode/
 .idea/
+nul
+nul

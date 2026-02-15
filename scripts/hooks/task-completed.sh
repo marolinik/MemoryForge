@@ -21,29 +21,22 @@ TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
 mkdir -p "$MIND_DIR"
 
-# Parse stdin
-INPUT=$(cat)
-TASK_INFO=$(echo "$INPUT" | node -e "
+# Parse stdin and log in a single Node invocation (Bug #5 R7/R8)
+MIND_DIR="$MIND_DIR" TIMESTAMP="$TIMESTAMP" node -e "
   let d='';process.stdin.on('data',c=>d+=c);
   process.stdin.on('end',()=>{
+    const fs=require('fs');
+    const path=require('path');
     try {
       const j=JSON.parse(d);
-      console.log(JSON.stringify({
-        id: j.task_id||'unknown',
-        subject: j.task_subject||'unknown',
-        teammate: j.teammate_name||'self',
-        team: j.team_name||''
-      }));
-    } catch { console.log('{\"id\":\"unknown\",\"subject\":\"unknown\",\"teammate\":\"self\",\"team\":\"\"}'); }
+      const id=j.task_id||'unknown';
+      const subject=j.task_subject||'unknown';
+      const teammate=j.teammate_name||'self';
+      const ts=process.env.TIMESTAMP;
+      const mindDir=process.env.MIND_DIR;
+      const line='['+ts+'] COMPLETED: #'+id+' — '+subject+' (by: '+teammate+')\n';
+      fs.appendFileSync(path.join(mindDir,'.task-completions'),line);
+    } catch {}
+    console.log('{}');
   })
-" 2>/dev/null || echo '{"id":"unknown","subject":"unknown","teammate":"self","team":""}')
-
-TASK_ID=$(echo "$TASK_INFO" | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>console.log(JSON.parse(d).id))" 2>/dev/null || echo "unknown")
-TASK_SUBJECT=$(echo "$TASK_INFO" | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>console.log(JSON.parse(d).subject))" 2>/dev/null || echo "unknown")
-TEAMMATE=$(echo "$TASK_INFO" | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>console.log(JSON.parse(d).teammate))" 2>/dev/null || echo "self")
-
-# Log to task completions file
-echo "[$TIMESTAMP] COMPLETED: #$TASK_ID — $TASK_SUBJECT (by: $TEAMMATE)" >> "$MIND_DIR/.task-completions"
-
-# Output empty — task completion is just logged, no context needed
-echo '{}'
+" < /dev/stdin || echo '{}'

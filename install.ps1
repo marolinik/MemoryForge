@@ -26,10 +26,47 @@ param(
     [switch]$Full,
     [switch]$DryRun,
     [switch]$NoClaudeMd,
-    [switch]$Uninstall
+    [switch]$Uninstall,
+    [switch]$Help
 )
 
 $ErrorActionPreference = "Stop"
+$MemoryForgeVersion = "1.9.0"
+
+# --- Help ---
+if ($Help) {
+    Write-Host ""
+    Write-Host "  MemoryForge Installer v$MemoryForgeVersion"
+    Write-Host ""
+    Write-Host "  Usage: .\install.ps1 [options]"
+    Write-Host ""
+    Write-Host "  Options:"
+    Write-Host "    -Global       Install to ~/.claude/ (user-level)"
+    Write-Host "    -WithTeam     Include team agent templates"
+    Write-Host "    -WithVector   Include vector search extension"
+    Write-Host "    -WithGraph    Include graph memory extension"
+    Write-Host "    -Full         Enable all extensions"
+    Write-Host "    -DryRun       Preview changes without modifying files"
+    Write-Host "    -NoClaudeMd   Skip CLAUDE.md modifications"
+    Write-Host "    -Uninstall    Remove MemoryForge from project"
+    Write-Host "    -Help         Show this help message"
+    Write-Host ""
+    exit 0
+}
+
+# --- Check Node.js prerequisite ---
+try {
+    $null = Get-Command node -ErrorAction Stop
+    $NodeVersion = (node -e "console.log(process.versions.node.split('.')[0])") 2>$null
+    if ([int]$NodeVersion -lt 18) {
+        Write-Host "WARNING: Node.js $NodeVersion detected, but 18+ is recommended." -ForegroundColor Yellow
+    }
+} catch {
+    Write-Host "ERROR: Node.js is required but not found." -ForegroundColor Red
+    Write-Host "MemoryForge hooks use Node.js for JSON parsing, MCP server, and search."
+    Write-Host "Install Node.js 18+ from: https://nodejs.org/"
+    exit 1
+}
 
 # Expand -Full into individual flags
 if ($Full) { $WithTeam = $true; $WithVector = $true; $WithGraph = $true }
@@ -81,6 +118,15 @@ if ($Uninstall) {
         Write-Host "  DRY RUN - no files will be modified" -ForegroundColor Cyan
     }
     Write-Host ""
+
+    if (-not $DryRun) {
+        $confirm = Read-Host "  Continue? (y/N)"
+        if ($confirm -ne 'y' -and $confirm -ne 'Y') {
+            Write-Host "  Cancelled." -ForegroundColor DarkGray
+            exit 0
+        }
+        Write-Host ""
+    }
 
     $Removed = 0
 
@@ -175,14 +221,9 @@ if ($Uninstall) {
             } else {
                 Copy-Item $mcpJsonPath "${mcpJsonPath}.backup" -Force
                 try {
-                    $cleanScript = @"
-const fs = require('fs');
-const mcp = JSON.parse(fs.readFileSync('$($mcpJsonPath -replace '\\','/')', 'utf-8'));
-if (mcp.mcpServers && mcp.mcpServers.memory) { delete mcp.mcpServers.memory; }
-if (Object.keys(mcp.mcpServers || {}).length === 0) { fs.unlinkSync('$($mcpJsonPath -replace '\\','/')'); }
-else { fs.writeFileSync('$($mcpJsonPath -replace '\\','/')', JSON.stringify(mcp, null, 2) + '\n'); }
-"@
-                    $cleanScript | & node -e "process.stdin.resume(); let d=''; process.stdin.on('data',c=>d+=c); process.stdin.on('end',()=>eval(d));" 2>$null
+                    $env:MCP_FILE = ($mcpJsonPath -replace '\\','/')
+                    & node -e "const fs=require('fs');const p=process.env.MCP_FILE;const mcp=JSON.parse(fs.readFileSync(p,'utf-8'));if(mcp.mcpServers&&mcp.mcpServers.memory){delete mcp.mcpServers.memory}if(Object.keys(mcp.mcpServers||{}).length===0){fs.unlinkSync(p)}else{fs.writeFileSync(p,JSON.stringify(mcp,null,2)+'\n')}" 2>$null
+                    $env:MCP_FILE = $null
                     if (Test-Path $mcpJsonPath) {
                         Ok "Removed memory server from .mcp.json (other servers preserved)"
                     } else {
@@ -444,15 +485,11 @@ if ($Global) {
     } else {
         Copy-Item $mcpJson "${mcpJson}.backup" -Force
         try {
-            $mergeScript = @"
-const fs = require('fs');
-const existing = JSON.parse(fs.readFileSync('$($mcpJson -replace '\\','/')', 'utf-8'));
-const mf = JSON.parse(fs.readFileSync('$($mfMcpJson -replace '\\','/')', 'utf-8'));
-existing.mcpServers = existing.mcpServers || {};
-Object.assign(existing.mcpServers, mf.mcpServers);
-fs.writeFileSync('$($mcpJson -replace '\\','/')', JSON.stringify(existing, null, 2) + '\n');
-"@
-            $mergeScript | & node -e "process.stdin.resume(); let d=''; process.stdin.on('data',c=>d+=c); process.stdin.on('end',()=>eval(d));" 2>$null
+            $env:MCP_FILE = ($mcpJson -replace '\\','/')
+            $env:MF_FILE = ($mfMcpJson -replace '\\','/')
+            & node -e "const fs=require('fs');const existing=JSON.parse(fs.readFileSync(process.env.MCP_FILE,'utf-8'));const mf=JSON.parse(fs.readFileSync(process.env.MF_FILE,'utf-8'));existing.mcpServers=existing.mcpServers||{};Object.assign(existing.mcpServers,mf.mcpServers);fs.writeFileSync(process.env.MCP_FILE,JSON.stringify(existing,null,2)+'\n')" 2>$null
+            $env:MCP_FILE = $null
+            $env:MF_FILE = $null
             Ok "Added memory server to existing .mcp.json"
         } catch {
             Warn "Could not merge .mcp.json — saving reference copy"
@@ -468,15 +505,19 @@ fs.writeFileSync('$($mcpJson -replace '\\','/')', JSON.stringify(existing, null,
     }
 }
 
-# Copy MCP server script to project
+# Copy MCP server and supporting scripts to project
 if (-not $Global) {
-    $mcpServerDest = Join-Path $TargetDir "scripts\mcp-memory-server.js"
     if ($DryRun) {
-        Dry "Would copy mcp-memory-server.js to scripts\"
+        Dry "Would copy scripts to $TargetDir\scripts\"
     } else {
         New-Item -ItemType Directory -Force -Path (Join-Path $TargetDir "scripts") | Out-Null
-        Copy-Item "$ScriptDir\scripts\mcp-memory-server.js" $mcpServerDest -Force
-        Ok "Copied MCP memory server to scripts\"
+        foreach ($script in @("mcp-memory-server.js", "vector-memory.js", "config-keys.js", "compress-sessions.js", "health-check.js")) {
+            $src = Join-Path $ScriptDir "scripts\$script"
+            if (Test-Path $src) {
+                Copy-Item $src (Join-Path $TargetDir "scripts\$script") -Force
+            }
+        }
+        Ok "Copied MCP server and supporting scripts to scripts\"
     }
 }
 
@@ -553,7 +594,9 @@ if ($Global) {
         ".mind/.task-completions",
         ".mind/.session-tracking",
         ".mind/.file-tracker",
+        ".mind/.prompt-context",
         ".mind/.mcp-errors.log",
+        ".mind/.write-lock",
         ".mind/ARCHIVE.md",
         ".mind/dashboard.html",
         ".mind/checkpoints/",
@@ -667,12 +710,37 @@ if (-not $Global -and -not $NoClaudeMd) {
 # =============================================================================
 # Summary
 # =============================================================================
+# =============================================================================
+# VERSION TRACKING (Wave 16)
+# =============================================================================
+if (-not $Global) {
+    $versionFile = Join-Path $TargetDir ".memoryforge-version"
+    if ($DryRun) {
+        if (Test-Path $versionFile) {
+            $installedVersion = (Get-Content $versionFile -Raw).Trim()
+            if ($installedVersion -ne $MemoryForgeVersion) {
+                Dry "Would upgrade version tracking: $installedVersion -> $MemoryForgeVersion"
+            }
+        } else {
+            Dry "Would create .memoryforge-version ($MemoryForgeVersion)"
+        }
+    } else {
+        if (Test-Path $versionFile) {
+            $installedVersion = (Get-Content $versionFile -Raw).Trim()
+            if ($installedVersion -ne $MemoryForgeVersion) {
+                Write-Host "  Upgrade detected: $installedVersion -> $MemoryForgeVersion" -ForegroundColor Cyan
+            }
+        }
+        $MemoryForgeVersion | Set-Content -Path $versionFile -Encoding UTF8 -NoNewline
+    }
+}
+
 Write-Host ""
 if ($DryRun) {
     Write-Host "  Dry run complete. No files were modified." -ForegroundColor Cyan
     Write-Host "  Run without -DryRun to apply changes." -ForegroundColor DarkGray
 } else {
-    Write-Host "  Installation complete." -ForegroundColor Green
+    Write-Host "  Installation complete. (v$MemoryForgeVersion)" -ForegroundColor Green
 }
 Write-Host ""
 

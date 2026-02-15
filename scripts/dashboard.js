@@ -14,7 +14,7 @@
 
 const fs = require("fs");
 const path = require("path");
-const { exec } = require("child_process");
+const { execFile } = require("child_process");
 
 const args = process.argv.slice(2);
 const noOpen = args.includes("--no-open");
@@ -285,7 +285,7 @@ const html = `<!DOCTYPE html>
     <div class="label">Decisions recorded</div>
   </div>
   <div class="stat-card amber">
-    <div class="value">${currentPhase.length > 25 ? currentPhase.substring(0, 25) + "..." : currentPhase}</div>
+    <div class="value">${(currentPhase.length > 25 ? currentPhase.substring(0, 25) + "..." : currentPhase).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")}</div>
     <div class="label" style="font-size:11px">Current Phase</div>
   </div>
 </div>
@@ -325,17 +325,23 @@ console.log(`Dashboard generated: ${outPath}`);
 
 if (!noOpen) {
   const platform = process.platform;
-  const cmd =
-    platform === "win32"
-      ? `start "" "${outPath}"`
-      : platform === "darwin"
-        ? `open "${outPath}"`
-        : `xdg-open "${outPath}"`;
+  const opener =
+    platform === "win32" ? "cmd"
+      : platform === "darwin" ? "open"
+        : "xdg-open";
+  const openerArgs =
+    platform === "win32" ? ["/c", "start", "", outPath]
+      : [outPath];
 
-  exec(cmd, (err) => {
+  execFile(opener, openerArgs, (err) => {
     if (err) {
-      console.log("Could not open browser automatically. Open the file manually:");
-      console.log(`  ${outPath}`);
+      console.log("Could not open browser automatically.");
+      console.log("Open this file in your browser:");
+      console.log(`  file://${path.resolve(outPath)}`);
+      if (platform === "linux") {
+        console.log("Tip: Install xdg-utils (sudo apt install xdg-utils) for auto-open support.");
+      }
+      console.log("Or use: --no-open flag to suppress this message.");
     }
   });
 }

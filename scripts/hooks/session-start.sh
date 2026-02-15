@@ -30,13 +30,38 @@ SOURCE=$(echo "$INPUT" | node -e "
   process.stdin.on('end',()=>{try{console.log(JSON.parse(d).source||'startup')}catch{console.log('startup')}})
 " 2>/dev/null || echo "startup")
 
+# --- Rotate .mcp-errors.log if too large (Wave 16) ---
+# Keep error log under 100KB to prevent unbounded growth
+# Use tail -n instead of tail -c to avoid cutting mid-UTF-8 character (Bug #10)
+ERROR_LOG="$MIND_DIR/.mcp-errors.log"
+if [ -f "$ERROR_LOG" ]; then
+  ERROR_SIZE=$(wc -c < "$ERROR_LOG" 2>/dev/null | tr -d ' ' || echo "0")
+  if [ "$ERROR_SIZE" -gt 102400 ]; then
+    # Keep last 500 lines (approximately 50KB)
+    tail -n 500 "$ERROR_LOG" > "${ERROR_LOG}.tmp" 2>/dev/null && mv "${ERROR_LOG}.tmp" "$ERROR_LOG" || true
+  fi
+fi
+
+# --- Rotate tracking files if too large (Bug #2) ---
+# Prevents unbounded growth of .agent-activity, .task-completions, .session-tracking
+for TRACK_FILE in ".agent-activity" ".task-completions" ".session-tracking"; do
+  TRACK_PATH="$MIND_DIR/$TRACK_FILE"
+  if [ -f "$TRACK_PATH" ]; then
+    TRACK_LINES=$(wc -l < "$TRACK_PATH" 2>/dev/null | tr -d ' ' || echo "0")
+    case "$TRACK_LINES" in ''|*[!0-9]*) TRACK_LINES=0 ;; esac
+    if [ "$TRACK_LINES" -gt 200 ]; then
+      tail -n 100 "$TRACK_PATH" > "${TRACK_PATH}.tmp" 2>/dev/null && mv "${TRACK_PATH}.tmp" "$TRACK_PATH" || true
+    fi
+  fi
+done
+
 # --- Auto-compress if .mind/ files are large (Wave 3) ---
 # Check total size of .mind/ markdown files (skip checkpoints, tracking files)
 # Read threshold from config if available, otherwise default to 12KB (~3000 tokens)
 COMPRESS_THRESHOLD=12000
-if [ -f "$PROJECT_DIR/.memoryforge.config.json" ]; then
-  CONFIG_THRESHOLD=$(node -e "
-    try{const c=JSON.parse(require('fs').readFileSync('$PROJECT_DIR/.memoryforge.config.json','utf-8'));
+if [ -f "$PROJECT_DIR/.memoryforge.config.json" ] && [ ! -L "$PROJECT_DIR/.memoryforge.config.json" ]; then
+  CONFIG_THRESHOLD=$(MEMORYFORGE_CONFIG="$PROJECT_DIR/.memoryforge.config.json" node -e "
+    try{const c=JSON.parse(require('fs').readFileSync(process.env.MEMORYFORGE_CONFIG,'utf-8'));
     console.log(c.compressThresholdBytes||12000)}catch{console.log(12000)}
   " 2>/dev/null || echo "12000")
   COMPRESS_THRESHOLD="$CONFIG_THRESHOLD"
@@ -45,7 +70,7 @@ if [ -d "$MIND_DIR" ]; then
   TOTAL_SIZE=0
   for md_file in "$MIND_DIR/STATE.md" "$MIND_DIR/PROGRESS.md" "$MIND_DIR/DECISIONS.md" "$MIND_DIR/SESSION-LOG.md"; do
     if [ -f "$md_file" ]; then
-      FILE_SIZE=$(wc -c < "$md_file" 2>/dev/null || echo "0")
+      FILE_SIZE=$(wc -c < "$md_file" 2>/dev/null | tr -d ' ' || echo "0")
       TOTAL_SIZE=$((TOTAL_SIZE + FILE_SIZE))
     fi
   done
@@ -63,7 +88,7 @@ if [ -d "$MIND_DIR" ]; then
     fi
 
     if [ -n "$COMPRESS_SCRIPT" ]; then
-      node "$COMPRESS_SCRIPT" "$MIND_DIR" >/dev/null 2>&1 || true
+      node "$COMPRESS_SCRIPT" -- "$MIND_DIR" >/dev/null 2>&1 || true
     fi
   fi
 fi
@@ -81,7 +106,10 @@ let cfg = {};
 try {
   const projectRoot = path.resolve(mindDir, '..');
   const cfgPath = path.join(projectRoot, '.memoryforge.config.json');
-  if (fs.existsSync(cfgPath)) cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf-8'));
+  try {
+    const st = fs.lstatSync(cfgPath);
+    if (!st.isSymbolicLink() && st.isFile()) cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf-8'));
+  } catch { /* no config file */ }
 } catch {}
 const SESSION_LOG_TAIL = cfg.sessionLogTailLines || 20;
 const RECENT_DECISIONS = cfg.briefingRecentDecisions || 5;

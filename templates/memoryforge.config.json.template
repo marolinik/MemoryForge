@@ -1,6 +1,4 @@
 {
-  "_comment": "MemoryForge Configuration — copy to your project root as .memoryforge.config.json",
-
   "keepSessionsFull": 5,
   "keepDecisionsFull": 10,
   "archiveAfterDays": 30,

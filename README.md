@@ -25,7 +25,9 @@
 
 MemoryForge gives Claude Code **persistent memory** that survives context compactions, session restarts, and multi-agent handoffs.
 
-It's a set of lifecycle hooks + Markdown state files that automatically save and restore Claude's understanding of your project. No databases, no APIs, no npm packages — just bash scripts and `.mind/` files.
+It's a set of lifecycle hooks + Markdown state files that automatically save and restore Claude's understanding of your project. No databases, no APIs, no npm packages — just bash scripts, Node.js, and `.mind/` files.
+
+> **Prerequisite:** [Node.js](https://nodejs.org/) 18+ must be installed. No npm packages are needed — just the Node.js runtime itself.
 
 **In plain English:** When Claude Code runs out of context space, it compresses old messages and forgets what it was doing. MemoryForge catches that moment, saves a checkpoint, and re-injects a briefing so Claude picks up exactly where it left off.
 
@@ -72,6 +74,11 @@ git clone https://github.com/marolinik/MemoryForge.git
 **2. Install into your project:**
 
 ```bash
+# Interactive guided setup (recommended for first-time users)
+cd MemoryForge
+node setup.js
+
+# Or use the CLI installer directly:
 # Unix / macOS / Git Bash on Windows
 bash MemoryForge/install.sh /path/to/your/project
 
@@ -145,7 +152,7 @@ This loop runs automatically. You don't have to do anything. The hooks fire on C
 | `DECISIONS.md` | Why did we choose X over Y? | When decisions are made |
 | `SESSION-LOG.md` | What happened in each session? | End of each session |
 
-**MCP tools** let Claude query and update `.mind/` mid-conversation:
+**MCP (Model Context Protocol) tools** let Claude query and update `.mind/` mid-conversation via the built-in MCP server:
 
 | Tool | What It Does |
 |:---|:---|
@@ -227,6 +234,10 @@ cp -r MemoryForge/templates/mind-library/ your-project/.mind/
 
 Templates include STATE.md, PROGRESS.md, DECISIONS.md, and SESSION-LOG.md pre-populated with phase structure and starter tasks for each project type.
 
+### Example: Mid-Project .mind/
+
+Want to see what `.mind/` files look like in a real project? Check out `templates/mind-example/` — a filled-in example showing a web app at Phase 3 with completed tasks, pending decisions, session history, and blockers.
+
 ### Session Compression
 
 As projects grow, `.mind/` files accumulate entries. The compressor keeps them lean:
@@ -245,6 +256,17 @@ node scripts/compress-sessions.js --dry-run .mind/  # preview only
 ### Progressive Briefings
 
 For large projects, the session-start hook automatically switches to a compact briefing (~200 tokens) that includes only the current state, in-progress tasks, and blockers. Full details are available via MCP tools (`memory_status`, `memory_search`). Post-compaction briefings always use the full format to maximize context recovery.
+
+### Health Check
+
+Diagnose your MemoryForge installation:
+
+```bash
+node scripts/health-check.js /path/to/project     # human-readable + JSON
+node scripts/health-check.js /path/to/project --json  # JSON only
+```
+
+Reports version status, `.mind/` file sizes and staleness, configuration validity, error log size, and overall health with actionable issues.
 
 ### Configuration
 
@@ -395,7 +417,7 @@ Claude Code has `MEMORY.md` for auto-notes and `CLAUDE.md` for instructions. But
 <details>
 <summary><strong>Does this work on Windows?</strong></summary>
 
-Yes. Hook scripts use bash (Git Bash, included with Git for Windows) and Node.js. The PowerShell installer (`install.ps1`) provides native Windows support with all the same features.
+Yes. The PowerShell installer (`install.ps1`) provides native Windows support. Hook scripts require **bash** — install [Git for Windows](https://git-scm.com/download/win) which includes Git Bash. Claude Code on Windows runs hooks through Git Bash automatically when bash is available in your PATH.
 </details>
 
 <details>
@@ -444,15 +466,16 @@ Yes, and you should. The state files are Markdown designed for git. Auto-generat
 
 ## Testing
 
-42 tests, zero dependencies — all using Node.js built-in `assert`:
+58 tests, zero dependencies — all using Node.js built-in `assert`:
 
 ```bash
-node tests/mcp-server.test.js     # 19 tests — all 6 MCP tools + transport + security
+node tests/mcp-server.test.js     # 23 tests — all 6 MCP tools + transport + security + concurrency
 node tests/compress.test.js       # 9 tests  — compression, archival, rotation
 node tests/vector-memory.test.js  # 14 tests — TF-IDF, tokenization, hybrid search
+node tests/hooks.test.js          # 12 tests — hook lifecycle, checkpoint rotation, config validation
 ```
 
-CI runs on every push: macOS + Linux + Windows, Node 18/20/22.
+CI runs on every push: macOS + Linux + Windows, Node 18/20/22. Includes shellcheck linting (`-S error`) for all hook scripts.
 
 ---
 
@@ -468,7 +491,7 @@ CI runs on every push: macOS + Linux + Windows, Node 18/20/22.
 | [`templates/CLAUDE.md.template`](templates/CLAUDE.md.template) | Mind Protocol section for your CLAUDE.md |
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | Dev setup, testing, PR process |
 | [`SECURITY.md`](SECURITY.md) | Security policy and threat model |
-| [`CHANGELOG.md`](CHANGELOG.md) | Version history (Waves 1-13) |
+| [`CHANGELOG.md`](CHANGELOG.md) | Version history (Waves 1-23) |
 
 ---
 

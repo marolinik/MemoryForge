@@ -25,6 +25,9 @@ const args = process.argv.slice(2);
 const dryRun = args.includes("--dry-run");
 const mindDir = args.find((a) => !a.startsWith("--")) || ".mind";
 
+// Known config keys (shared schema)
+const { KNOWN_CONFIG_KEYS } = require("./config-keys.js");
+
 // Load user config if present (project root = parent of .mind/)
 const defaults = {
   keepSessionsFull: 5,
@@ -36,18 +39,39 @@ let userConfig = {};
 try {
   const projectRoot = path.resolve(mindDir, "..");
   const configPath = path.join(projectRoot, ".memoryforge.config.json");
-  if (fs.existsSync(configPath)) {
+  // Symlink check — don't follow symlinks for config (Bug #19)
+  const stat = fs.lstatSync(configPath);
+  if (!stat.isSymbolicLink() && stat.isFile()) {
     userConfig = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+    // Warn on unknown keys (schema validation — Bug #22)
+    const unknownKeys = Object.keys(userConfig).filter(
+      (k) => !KNOWN_CONFIG_KEYS.has(k)
+    );
+    if (unknownKeys.length > 0) {
+      process.stderr.write(
+        `[MemoryForge] Warning: unknown config key(s): ${unknownKeys.join(", ")} — check for typos\n`
+      );
+    }
   }
 } catch {
   // Config load failed — use defaults silently
 }
 const config = { ...defaults, ...userConfig };
 
-const KEEP_SESSIONS_FULL = config.keepSessionsFull;
-const KEEP_DECISIONS_FULL = config.keepDecisionsFull;
-const ARCHIVE_AFTER_DAYS = config.archiveAfterDays;
-const TRACKING_MAX_LINES = config.trackingMaxLines;
+// Bounds-check config values — clamp to sane minimums
+// Use Number.isSafeInteger after flooring to reject extreme values like 1e308 (Bug #11)
+function safeInt(val, fallback, min) {
+  const n = Math.floor(Number(val));
+  if (!Number.isSafeInteger(n) || n < min) return fallback;
+  return n;
+}
+const KEEP_SESSIONS_FULL = safeInt(config.keepSessionsFull, defaults.keepSessionsFull, 1);
+const KEEP_DECISIONS_FULL = safeInt(config.keepDecisionsFull, defaults.keepDecisionsFull, 1);
+const ARCHIVE_AFTER_DAYS = safeInt(config.archiveAfterDays, defaults.archiveAfterDays, 1);
+const TRACKING_MAX_LINES = safeInt(config.trackingMaxLines, defaults.trackingMaxLines, 10);
+// Reject compressThresholdBytes=0 which silently disables compression (Bug #3)
+const COMPRESS_THRESHOLD_BYTES = safeInt(config.compressThresholdBytes, 12000, 1000);
+const MAX_PRE_COMPRESS_BACKUPS = 3;
 
 function readFile(filePath) {
   try {
@@ -55,6 +79,12 @@ function readFile(filePath) {
   } catch {
     return null;
   }
+}
+
+function atomicWrite(filePath, content) {
+  const tmpPath = filePath + '.tmp.' + process.pid;
+  fs.writeFileSync(tmpPath, content, 'utf-8');
+  fs.renameSync(tmpPath, filePath);
 }
 
 function estimateTokens(text) {
@@ -154,9 +184,9 @@ function compressSessions(filePath) {
   const after = estimateTokens(result);
 
   if (!dryRun) {
-    // Backup original
+    // Backup original, then atomic write
     fs.copyFileSync(filePath, filePath + ".pre-compress");
-    fs.writeFileSync(filePath, result);
+    atomicWrite(filePath, result);
   }
 
   return {
@@ -240,7 +270,7 @@ function compressDecisions(filePath) {
 
   if (!dryRun) {
     fs.copyFileSync(filePath, filePath + ".pre-compress");
-    fs.writeFileSync(filePath, result);
+    atomicWrite(filePath, result);
   }
 
   return {
@@ -293,11 +323,11 @@ function archiveCompletedTasks(progressPath, archivePath) {
     for (const line of archived) {
       archiveContent += line + "\n";
     }
-    fs.writeFileSync(archivePath, archiveContent);
+    atomicWrite(archivePath, archiveContent);
 
     // Rewrite PROGRESS.md without archived tasks
     fs.copyFileSync(progressPath, progressPath + ".pre-compress");
-    fs.writeFileSync(progressPath, kept.join("\n"));
+    atomicWrite(progressPath, kept.join("\n"));
   }
 
   return { archived: archived.length };
@@ -328,79 +358,126 @@ function rotateTrackingFile(filePath, maxLines) {
 }
 
 // ---------------------------------------------------------------------------
-// Main
+// Cleanup old .pre-compress backup files — keep last N (Bug #9)
 // ---------------------------------------------------------------------------
-const sessionLogPath = path.join(mindDir, "SESSION-LOG.md");
-const decisionsPath = path.join(mindDir, "DECISIONS.md");
-const progressPath = path.join(mindDir, "PROGRESS.md");
-const archivePath = path.join(mindDir, "ARCHIVE.md");
+function cleanupPreCompressBackups(dir) {
+  try {
+    const files = fs.readdirSync(dir)
+      .filter((f) => f.endsWith(".pre-compress"))
+      .map((f) => ({
+        name: f,
+        path: path.join(dir, f),
+        mtime: fs.statSync(path.join(dir, f)).mtimeMs,
+      }))
+      .sort((a, b) => b.mtime - a.mtime);
 
-const sessionResult = compressSessions(sessionLogPath);
-const decisionResult = compressDecisions(decisionsPath);
-const archiveResult = archiveCompletedTasks(progressPath, archivePath);
-
-// Rotate tracking files
-const trackingFiles = [
-  ".agent-activity",
-  ".task-completions",
-  ".session-tracking",
-];
-const rotationResults = {};
-for (const tf of trackingFiles) {
-  const tfPath = path.join(mindDir, tf);
-  rotationResults[tf] = rotateTrackingFile(tfPath, TRACKING_MAX_LINES);
+    // Remove all beyond MAX_PRE_COMPRESS_BACKUPS
+    const toRemove = files.slice(MAX_PRE_COMPRESS_BACKUPS);
+    for (const f of toRemove) {
+      fs.unlinkSync(f.path);
+    }
+    return { removed: toRemove.length, kept: files.length - toRemove.length };
+  } catch {
+    return { removed: 0, kept: 0 };
+  }
 }
 
-const totalSaved = sessionResult.saved + decisionResult.saved;
-
-// Output as JSON for programmatic consumption
-const output = {
-  dryRun,
-  sessions: sessionResult,
-  decisions: decisionResult,
-  archive: archiveResult,
-  tracking: rotationResults,
-  totalTokensSaved: totalSaved,
+// ---------------------------------------------------------------------------
+// Exports (for require() usage without side effects — Bug #7)
+// ---------------------------------------------------------------------------
+module.exports = {
+  compressSessions,
+  compressDecisions,
+  archiveCompletedTasks,
+  rotateTrackingFile,
+  cleanupPreCompressBackups,
 };
 
-console.log(JSON.stringify(output, null, 2));
+// ---------------------------------------------------------------------------
+// Main (only runs when executed directly, not when required — Bug #7)
+// ---------------------------------------------------------------------------
+if (require.main === module) {
+  const sessionLogPath = path.join(mindDir, "SESSION-LOG.md");
+  const decisionsPath = path.join(mindDir, "DECISIONS.md");
+  const progressPath = path.join(mindDir, "PROGRESS.md");
+  const archivePath = path.join(mindDir, "ARCHIVE.md");
 
-// Also output human-readable summary to stderr
-const parts = [];
-if (sessionResult.saved > 0) {
-  parts.push(
-    `  SESSION-LOG: ${sessionResult.compressed}/${sessionResult.sessions} sessions compressed, ~${sessionResult.saved} tokens saved`
-  );
-}
-if (decisionResult.saved > 0) {
-  parts.push(
-    `  DECISIONS: ${decisionResult.compressed}/${decisionResult.decisions} decisions compressed, ~${decisionResult.saved} tokens saved`
-  );
-}
-if (archiveResult.archived > 0) {
-  parts.push(
-    `  PROGRESS: ${archiveResult.archived} completed tasks archived to ARCHIVE.md`
-  );
-}
-for (const [tf, r] of Object.entries(rotationResults)) {
-  if (r.rotated) {
-    parts.push(`  ${tf}: rotated ${r.before} → ${r.after} entries`);
-  }
-}
+  const sessionResult = compressSessions(sessionLogPath);
+  const decisionResult = compressDecisions(decisionsPath);
+  const archiveResult = archiveCompletedTasks(progressPath, archivePath);
 
-if (parts.length > 0) {
-  process.stderr.write(
-    `\nMemoryForge Compression Report${dryRun ? " (dry run)" : ""}:\n`
-  );
-  for (const p of parts) {
-    process.stderr.write(p + "\n");
+  // Rotate tracking files
+  const trackingFiles = [
+    ".agent-activity",
+    ".task-completions",
+    ".session-tracking",
+  ];
+  const rotationResults = {};
+  for (const tf of trackingFiles) {
+    const tfPath = path.join(mindDir, tf);
+    rotationResults[tf] = rotateTrackingFile(tfPath, TRACKING_MAX_LINES);
   }
-  if (totalSaved > 0) {
-    process.stderr.write(`  Total saved: ~${totalSaved} tokens\n`);
+
+  // Cleanup old .pre-compress backups (Bug #9)
+  const backupCleanup = cleanupPreCompressBackups(mindDir);
+
+  const totalSaved = sessionResult.saved + decisionResult.saved;
+
+  // Output as JSON for programmatic consumption
+  const output = {
+    dryRun,
+    sessions: sessionResult,
+    decisions: decisionResult,
+    archive: archiveResult,
+    tracking: rotationResults,
+    backupCleanup,
+    totalTokensSaved: totalSaved,
+  };
+
+  console.log(JSON.stringify(output, null, 2));
+
+  // Also output human-readable summary to stderr
+  const parts = [];
+  if (sessionResult.saved > 0) {
+    parts.push(
+      `  SESSION-LOG: ${sessionResult.compressed}/${sessionResult.sessions} sessions compressed, ~${sessionResult.saved} tokens saved`
+    );
   }
-  process.stderr.write("\n");
-} else {
-  process.stderr.write(
-    `\nMemoryForge: Nothing to compress (sessions: ${sessionResult.sessions || 0}, decisions: ${decisionResult.decisions || 0})\n\n`
-  );
+  if (decisionResult.saved > 0) {
+    parts.push(
+      `  DECISIONS: ${decisionResult.compressed}/${decisionResult.decisions} decisions compressed, ~${decisionResult.saved} tokens saved`
+    );
+  }
+  if (archiveResult.archived > 0) {
+    parts.push(
+      `  PROGRESS: ${archiveResult.archived} completed tasks archived to ARCHIVE.md`
+    );
+  }
+  for (const [tf, r] of Object.entries(rotationResults)) {
+    if (r.rotated) {
+      parts.push(`  ${tf}: rotated ${r.before} → ${r.after} entries`);
+    }
+  }
+  if (backupCleanup.removed > 0) {
+    parts.push(
+      `  Backups: removed ${backupCleanup.removed} old .pre-compress files (kept ${backupCleanup.kept})`
+    );
+  }
+
+  if (parts.length > 0) {
+    process.stderr.write(
+      `\nMemoryForge Compression Report${dryRun ? " (dry run)" : ""}:\n`
+    );
+    for (const p of parts) {
+      process.stderr.write(p + "\n");
+    }
+    if (totalSaved > 0) {
+      process.stderr.write(`  Total saved: ~${totalSaved} tokens\n`);
+    }
+    process.stderr.write("\n");
+  } else {
+    process.stderr.write(
+      `\nMemoryForge: Nothing to compress (sessions: ${sessionResult.sessions || 0}, decisions: ${decisionResult.decisions || 0})\n\n`
+    );
+  }
 }

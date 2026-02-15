@@ -21,6 +21,8 @@
 
 set -euo pipefail
 
+MEMORYFORGE_VERSION="1.9.0"
+
 # --- Colors ---
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -30,6 +32,18 @@ CYAN='\033[0;36m'
 BOLD='\033[1m'
 DIM='\033[2m'
 NC='\033[0m'
+
+# --- Check Node.js prerequisite ---
+if ! command -v node &>/dev/null; then
+  echo -e "${RED}ERROR: Node.js is required but not found.${NC}"
+  echo -e "MemoryForge hooks use Node.js for JSON parsing, MCP server, and search."
+  echo -e "Install Node.js 18+ from: ${CYAN}https://nodejs.org/${NC}"
+  exit 1
+fi
+NODE_MAJOR=$(node -e "console.log(process.versions.node.split('.')[0])" 2>/dev/null || echo "0")
+if [ "$NODE_MAJOR" -lt 18 ]; then
+  echo -e "${YELLOW}WARNING: Node.js $NODE_MAJOR detected, but 18+ is recommended.${NC}"
+fi
 
 # --- Parse flags ---
 GLOBAL=false
@@ -135,6 +149,23 @@ if [ "$UNINSTALL" = true ]; then
   fi
   echo ""
 
+  # Confirmation prompt to prevent accidental uninstall (Bug #16)
+  if [ "$DRY_RUN" != true ]; then
+    echo -e "  ${YELLOW}This will remove MemoryForge hooks and scripts from:${NC}"
+    echo -e "  ${CYAN}$TARGET_DIR${NC}"
+    echo -e "  ${DIM}(.mind/ state files will be preserved)${NC}"
+    echo ""
+    read -r -p "  Continue? [y/N] " CONFIRM
+    case "$CONFIRM" in
+      [yY]|[yY][eE][sS]) ;;
+      *)
+        echo -e "  ${DIM}Cancelled.${NC}"
+        exit 0
+        ;;
+    esac
+    echo ""
+  fi
+
   REMOVED=0
 
   # 1. Remove hook scripts
@@ -226,16 +257,17 @@ if [ "$UNINSTALL" = true ]; then
         dry "Would remove memory server from .mcp.json"
       else
         cp "$MCP_JSON" "${MCP_JSON}.backup"
-        node -e "
+        MCP_FILE="$MCP_JSON" node -e "
           const fs = require('fs');
-          const mcp = JSON.parse(fs.readFileSync('$MCP_JSON', 'utf-8'));
+          const p = process.env.MCP_FILE;
+          const mcp = JSON.parse(fs.readFileSync(p, 'utf-8'));
           if (mcp.mcpServers && mcp.mcpServers.memory) {
             delete mcp.mcpServers.memory;
           }
           if (Object.keys(mcp.mcpServers || {}).length === 0) {
-            fs.unlinkSync('$MCP_JSON');
+            fs.unlinkSync(p);
           } else {
-            fs.writeFileSync('$MCP_JSON', JSON.stringify(mcp, null, 2) + '\n');
+            fs.writeFileSync(p, JSON.stringify(mcp, null, 2) + '\n');
           }
         " 2>/dev/null && {
           if [ -f "$MCP_JSON" ]; then
@@ -507,13 +539,13 @@ elif [ -f "$MCP_JSON" ]; then
       # Backup
       cp "$MCP_JSON" "${MCP_JSON}.backup"
       # Use node to merge
-      node -e "
+      MCP_FILE="$MCP_JSON" MF_FILE="$MF_MCP_JSON" node -e "
         const fs = require('fs');
-        const existing = JSON.parse(fs.readFileSync('$MCP_JSON', 'utf-8'));
-        const mf = JSON.parse(fs.readFileSync('$MF_MCP_JSON', 'utf-8'));
+        const existing = JSON.parse(fs.readFileSync(process.env.MCP_FILE, 'utf-8'));
+        const mf = JSON.parse(fs.readFileSync(process.env.MF_FILE, 'utf-8'));
         existing.mcpServers = existing.mcpServers || {};
         Object.assign(existing.mcpServers, mf.mcpServers);
-        fs.writeFileSync('$MCP_JSON', JSON.stringify(existing, null, 2) + '\n');
+        fs.writeFileSync(process.env.MCP_FILE, JSON.stringify(existing, null, 2) + '\n');
       " 2>/dev/null && ok "Added memory server to existing .mcp.json" || {
         warn "Could not merge .mcp.json — saving reference copy"
         cp "$MF_MCP_JSON" "${TARGET_DIR}/.mcp.memoryforge.json"
@@ -529,15 +561,18 @@ else
   fi
 fi
 
-# Copy MCP server script to project
+# Copy MCP server and supporting scripts to project
 if [ "$GLOBAL" != true ]; then
-  MCP_SERVER_DEST="$TARGET_DIR/scripts/mcp-memory-server.js"
   if [ "$DRY_RUN" = true ]; then
-    dry "Would copy mcp-memory-server.js to scripts/"
+    dry "Would copy scripts to $TARGET_DIR/scripts/"
   else
     mkdir -p "$TARGET_DIR/scripts"
-    cp "$SCRIPT_DIR/scripts/mcp-memory-server.js" "$MCP_SERVER_DEST"
-    ok "Copied MCP memory server to scripts/"
+    for script in mcp-memory-server.js vector-memory.js config-keys.js compress-sessions.js health-check.js; do
+      if [ -f "$SCRIPT_DIR/scripts/$script" ]; then
+        cp "$SCRIPT_DIR/scripts/$script" "$TARGET_DIR/scripts/$script"
+      fi
+    done
+    ok "Copied MCP server and supporting scripts to scripts/"
   fi
 fi
 
@@ -605,6 +640,8 @@ else
     ".mind/.task-completions"
     ".mind/.session-tracking"
     ".mind/.file-tracker"
+    ".mind/.write-lock"
+    ".mind/.prompt-context"
     ".mind/.mcp-errors.log"
     ".mind/ARCHIVE.md"
     ".mind/dashboard.html"
@@ -722,6 +759,31 @@ if [ "$WITH_GRAPH" = true ]; then
 fi
 
 # =============================================================================
+# VERSION TRACKING (Wave 16)
+# =============================================================================
+if [ "$GLOBAL" != true ]; then
+  VERSION_FILE="$TARGET_DIR/.memoryforge-version"
+  if [ "$DRY_RUN" = true ]; then
+    if [ -f "$VERSION_FILE" ]; then
+      INSTALLED_VERSION=$(cat "$VERSION_FILE" 2>/dev/null || echo "unknown")
+      if [ "$INSTALLED_VERSION" != "$MEMORYFORGE_VERSION" ]; then
+        dry "Would upgrade version tracking: $INSTALLED_VERSION → $MEMORYFORGE_VERSION"
+      fi
+    else
+      dry "Would create .memoryforge-version ($MEMORYFORGE_VERSION)"
+    fi
+  else
+    if [ -f "$VERSION_FILE" ]; then
+      INSTALLED_VERSION=$(cat "$VERSION_FILE" 2>/dev/null || echo "unknown")
+      if [ "$INSTALLED_VERSION" != "$MEMORYFORGE_VERSION" ]; then
+        echo -e "  ${CYAN}Upgrade detected:${NC} $INSTALLED_VERSION → $MEMORYFORGE_VERSION"
+      fi
+    fi
+    echo "$MEMORYFORGE_VERSION" > "$VERSION_FILE"
+  fi
+fi
+
+# =============================================================================
 # Summary
 # =============================================================================
 echo ""
@@ -729,7 +791,7 @@ if [ "$DRY_RUN" = true ]; then
   echo -e "${BOLD}${CYAN}  Dry run complete. No files were modified.${NC}"
   echo -e "  ${DIM}Run without --dry-run to apply changes.${NC}"
 else
-  echo -e "${BOLD}${GREEN}  Installation complete.${NC}"
+  echo -e "${BOLD}${GREEN}  Installation complete. (v$MEMORYFORGE_VERSION)${NC}"
 fi
 echo ""
 

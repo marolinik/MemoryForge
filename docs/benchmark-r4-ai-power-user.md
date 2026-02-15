@@ -1,0 +1,35 @@
+# MemoryForge Benchmark Round 4: AI Power User / Tool Builder
+
+PERSONA: AI Power User / Tool Builder (15% of market)
+VERDICT: Conditional — Solid MCP foundation with correct protocol implementation and a clever hook-driven memory loop, but extensibility is limited by tight coupling, the TF-IDF implementation cuts meaningful corners, and state management lacks file-level locking for concurrent access.
+
+SCORES:
+D1 MCP Integration: 8 — Correct JSON-RPC 2.0 over Content-Length stdio with proper Buffer-based framing, 6 well-designed tools with input validation and `isError` signaling, though it lacks resource/prompt capabilities and the `protocolVersion` is pinned to a specific date string rather than being negotiated.
+D2 Hook Architecture: 9 — Covers all 8 Claude Code lifecycle events (SessionStart, PreCompact, Stop, SessionEnd, UserPromptSubmit, SubagentStart, SubagentStop, TaskCompleted) with correct stdin/stdout JSON protocol; the pre-compact/session-start loop for surviving context compaction is genuinely well-engineered.
+D3 Extensibility: 5 — Modules export their functions (`compress-sessions.js`, `vector-memory.js`) enabling `require()` reuse, but the MCP server has no plugin system, tool registration is a hardcoded array, the hook scripts embed Node.js inline rather than delegating to importable modules, and there is no programmatic API for extending the tool set without forking.
+D4 Semantic Search: 6 — TF-IDF math is correct (normalized TF * log(1+N/df) with dirty-flag IDF caching keyed on file mtimes), but the stemmer is a naive suffix-stripper that produces incorrect stems (e.g., "running" -> "runn", "decided" -> "decid" which won't match "decide"), the tokenizer strips all non-ASCII characters destroying non-English content, and there is no BM25 or cosine normalization for query length.
+D5 State Management: 5 — No file-level locking means concurrent MCP calls or simultaneous hook writes can race on the same `.mind/` files; `appendFileSync` and `writeFileSync` are not atomic on all platforms (especially Windows/NFS); the compressor backs up before overwriting but does not use rename-based atomic writes; the `safePath` traversal guard is correct.
+D6 Agent Support: 7 — Full subagent lifecycle coverage (start/stop hooks log to `.agent-activity`, task-completed hook logs to `.task-completions`), Mind/Orchestrator/Builder agent templates with clear role boundaries, shared `.mind/` directory as coordination mechanism; however, there is no inter-agent message passing, no task queue, no conflict resolution when parallel agents write to the same file simultaneously.
+D7 Innovation: 8 — The persistent memory loop (pre-compact checkpoint -> session-start reinject with source=compact) is a genuinely novel solution to Claude Code's context compaction problem; progressive briefing based on project size, per-prompt state nudges, auto-generated session summaries from git file tracking, and the fleet dashboard for multi-project oversight show creative thinking beyond basic persistence.
+AVERAGE: 6.86
+
+STRENGTHS:
+- The pre-compact/session-start memory loop is architecturally elegant and solves a real problem (context loss during compaction) that most Claude Code tools ignore entirely; the checkpoint system with timestamped backups and pruning shows production thinking.
+- MCP protocol implementation is technically correct: proper Content-Length byte framing with Buffer (not string) slicing, handles multi-byte UTF-8 correctly, enforces message size limits (10MB) against OOM, and returns proper JSON-RPC error codes (-32601 for unknown methods).
+- Complete hook lifecycle coverage across all 8 Claude Code events, with each hook being defensive (set -euo pipefail, graceful fallbacks, consuming stdin even when not needed, cross-platform stat compatibility).
+- Zero-dependency philosophy throughout the entire stack — no npm install, no native modules, no build step — makes this trivially portable and eliminates supply-chain risk.
+- The in-process TF-IDF cache with mtime-based invalidation is a smart optimization that avoids reindexing on every search call while correctly detecting file changes.
+
+GAPS:
+- No file locking anywhere in the system: the MCP server, hooks, and compression scripts all write to `.mind/` files without advisory locks, meaning parallel agent writes or concurrent tool calls can corrupt state files (especially on Windows where this project runs).
+- The stemmer is too aggressive and too naive for production use — it strips suffixes greedily without checking minimum stem quality, producing stems like "runn" that won't match "run", and "decid" that won't match "decide"; a proper Porter stemmer or at minimum Snowball-lite would substantially improve search recall.
+- No plugin architecture for MCP tools: adding a custom tool requires editing the hardcoded TOOLS array and TOOL_HANDLERS map in the server source; a registration API or tool-discovery mechanism would make this far more extensible for power users.
+- The tokenizer's regex `[^a-z0-9\s-]` strips all non-ASCII characters, making semantic search useless for any project with non-English content, accented characters in identifiers, or Unicode in documentation.
+- Hooks embed substantial Node.js code as inline strings within bash scripts (e.g., session-start.sh has a ~100-line Node heredoc), making them hard to test, debug, and extend independently; extracting these into standalone `.js` modules that the shell scripts invoke would improve maintainability.
+
+BUGS:
+- [P2] Race condition in state file writes: `memorySaveProgress` does read-modify-write on PROGRESS.md without any locking. If two concurrent tool calls both try to complete tasks, one write will silently overwrite the other. Same pattern exists in `memoryUpdateState` and `memorySaveDecision`. The `appendMindFile` calls are slightly safer (append-only) but still not atomic on Windows.
+- [P2] The `hybridSearch` function re-reads files from disk for snippet extraction (lines 377-385 in vector-memory.js) even though the index already has the chunked text, causing redundant I/O and a potential TOCTOU issue if a file changes between indexing and snippet retrieval.
+- [P3] The stemmer produces asymmetric stems: `stem("running")` yields "runn" but `stem("run")` yields "run" (short word preserved), so a query for "run" will never match a document containing "running" through the TF-IDF path — the stemmer fails its fundamental purpose of conflation for these common cases.
+- [P3] In `user-prompt-context.sh` line 41, the numeric comparison `[ "$CACHE_MOD" -ge "$STATE_MOD" ]` will fail with a bash error if either variable is empty or non-numeric (e.g., if the `stat` commands both fail), and the `2>/dev/null` on that line suppresses the error but causes the cache to always be considered stale, forcing unnecessary regeneration.
+- [P3] The `subagent-stop.sh` hook spawns Node.js three separate times (lines 24, 38, 39) to parse a single JSON input, where a single invocation could extract all fields — this is a performance concern since SubagentStop fires on every agent completion and each Node.js spawn has ~50ms overhead.

@@ -58,8 +58,14 @@ function stem(word) {
   ];
 
   for (const suffix of suffixes) {
-    if (word.endsWith(suffix) && word.length - suffix.length >= 3) {
-      return word.slice(0, -suffix.length);
+    if (word.endsWith(suffix) && word.length - suffix.length >= 4) {
+      let stemmed = word.slice(0, -suffix.length);
+      // De-duplicate trailing consonant (e.g., "runn" -> "run", "stopp" -> "stop")
+      if (stemmed.length >= 3 && stemmed[stemmed.length - 1] === stemmed[stemmed.length - 2]
+          && !/[aeiou]/.test(stemmed[stemmed.length - 1])) {
+        stemmed = stemmed.slice(0, -1);
+      }
+      return stemmed;
     }
   }
 
@@ -233,7 +239,11 @@ class TFIDFIndex {
  * Each chunk is ~200-300 words with 50-word overlap.
  */
 function chunkFile(filename, content, chunkSize = 15, overlapLines = 3) {
+  // Handle empty files gracefully (Bug #13)
+  if (!content || content.trim().length === 0) return [];
+
   const lines = content.split('\n');
+  if (lines.length === 0) return [];
   const chunks = [];
 
   for (let i = 0; i < lines.length; i += chunkSize - overlapLines) {
@@ -268,22 +278,64 @@ function buildIndex(mindDir) {
     const filePath = path.join(mindDir, file);
     let content;
     try {
+      // Skip files >10MB to prevent OOM on corrupt/huge files (Bug #12)
+      const stat = fs.statSync(filePath);
+      if (stat.size > 10 * 1024 * 1024) continue;
       content = fs.readFileSync(filePath, 'utf-8');
     } catch {
       continue;
     }
 
     // Add whole-file document (for broad matching)
-    index.addDocument(file, content, { file, lineStart: 1, lineEnd: content.split('\n').length });
+    index.addDocument(file, content, { file, lineStart: 1, lineEnd: content.split('\n').length, _rawText: content.substring(0, 600) });
 
     // Add chunked documents (for granular matching)
     const chunks = chunkFile(file, content);
     for (const chunk of chunks) {
-      index.addDocument(chunk.docId, chunk.text, chunk.metadata);
+      index.addDocument(chunk.docId, chunk.text, { ...chunk.metadata, _rawText: chunk.text });
     }
   }
 
   return index;
+}
+
+// --- In-process Index Cache (Wave 15) ---
+// Keyed on file mtimes — rebuilds only when .mind/ files change.
+
+let _cachedIndex = null;
+let _cachedMindDir = null;
+let _cachedMtimes = null;
+
+function getFileMtimes(mindDir) {
+  const files = ['STATE.md', 'PROGRESS.md', 'DECISIONS.md', 'SESSION-LOG.md', 'ARCHIVE.md'];
+  const mtimes = {};
+  for (const file of files) {
+    try {
+      mtimes[file] = fs.statSync(path.join(mindDir, file)).mtimeMs;
+    } catch {
+      mtimes[file] = 0;
+    }
+  }
+  return mtimes;
+}
+
+function mtimesChanged(a, b) {
+  if (!a || !b) return true;
+  for (const key of Object.keys(a)) {
+    if (a[key] !== b[key]) return true;
+  }
+  return Object.keys(a).length !== Object.keys(b).length;
+}
+
+function getCachedIndex(mindDir) {
+  const mtimes = getFileMtimes(mindDir);
+  if (_cachedIndex && _cachedMindDir === mindDir && !mtimesChanged(mtimes, _cachedMtimes)) {
+    return _cachedIndex;
+  }
+  _cachedIndex = buildIndex(mindDir);
+  _cachedMindDir = mindDir;
+  _cachedMtimes = mtimes;
+  return _cachedIndex;
 }
 
 /**
@@ -293,8 +345,8 @@ function buildIndex(mindDir) {
 function hybridSearch(mindDir, query, options = {}) {
   const { limit = 10 } = options;
 
-  // 1. TF-IDF semantic search
-  const index = buildIndex(mindDir);
+  // 1. TF-IDF semantic search (cached — rebuilds only when files change)
+  const index = getCachedIndex(mindDir);
   const semanticResults = index.search(query, { limit: limit * 2 });
 
   // 2. Keyword exact search (existing behavior)
@@ -335,17 +387,12 @@ function hybridSearch(mindDir, query, options = {}) {
     if (seen.has(key)) continue;
     seen.add(key);
 
-    // Read the actual snippet for display
-    const filePath = path.join(mindDir, r.metadata.file);
-    let snippet = '';
-    try {
-      const lines = fs.readFileSync(filePath, 'utf-8').split('\n');
-      const start = Math.max(0, r.metadata.lineStart - 1);
-      const end = Math.min(lines.length, r.metadata.lineEnd);
-      snippet = lines.slice(start, end).join('\n');
-    } catch {
-      // skip
-    }
+    // Use indexed chunk text instead of re-reading from disk (avoids TOCTOU + redundant I/O)
+    const doc = index.documents.get(r.docId);
+    const snippet = doc ? doc.terms.length > 0
+      ? doc.metadata._rawText || ''
+      : ''
+      : '';
 
     merged.push({
       file: r.metadata.file,
@@ -382,7 +429,7 @@ function hybridSearch(mindDir, query, options = {}) {
 
 // --- Exports ---
 
-module.exports = { TFIDFIndex, tokenize, stem, chunkFile, buildIndex, hybridSearch };
+module.exports = { TFIDFIndex, tokenize, stem, chunkFile, buildIndex, hybridSearch, getCachedIndex };
 
 // --- CLI ---
 

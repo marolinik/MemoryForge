@@ -43,6 +43,18 @@ const path = require('path');
 const mindDir = process.argv[1];
 const trigger = process.argv[2];
 const checkpointDir = path.join(mindDir, 'checkpoints');
+
+// Load config for maxCheckpointFiles (default: 10)
+let maxCheckpointFiles = 10;
+try {
+  const cfgPath = path.join(path.resolve(mindDir, '..'), '.memoryforge.config.json');
+  const cfgStat = fs.lstatSync(cfgPath);
+  if (!cfgStat.isSymbolicLink() && cfgStat.isFile()) {
+    const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf-8'));
+    const val = Math.floor(Number(cfg.maxCheckpointFiles));
+    if (Number.isSafeInteger(val) && val >= 3) maxCheckpointFiles = val;
+  }
+} catch {}
 const timestamp = new Date().toISOString().replace(/[:.]/g, '-').replace(/Z$/, 'Z');
 const isoTimestamp = new Date().toISOString();
 
@@ -89,18 +101,30 @@ const checkpointContent = [
   ''
 ].join('\n');
 
-// Write checkpoint (both latest and timestamped)
+// Write checkpoint (latest always, timestamped only if last one is >5s old to prevent rapid-fire)
 fs.writeFileSync(path.join(checkpointDir, 'latest.md'), checkpointContent);
-fs.writeFileSync(path.join(checkpointDir, 'compact-' + timestamp + '.md'), checkpointContent);
+let writeTimestamped = true;
+try {
+  const existing = fs.readdirSync(checkpointDir)
+    .filter(f => f.startsWith('compact-') && f.endsWith('.md'))
+    .sort().reverse();
+  if (existing.length > 0) {
+    const lastStat = fs.statSync(path.join(checkpointDir, existing[0]));
+    if (Date.now() - lastStat.mtimeMs < 5000) writeTimestamped = false;
+  }
+} catch {}
+if (writeTimestamped) {
+  fs.writeFileSync(path.join(checkpointDir, 'compact-' + timestamp + '.md'), checkpointContent);
+}
 
-// Prune old checkpoints (keep last 10)
+// Prune old checkpoints (configurable, default 10) — prevents unbounded creation (Bug #17)
 try {
   const files = fs.readdirSync(checkpointDir)
     .filter(f => f.startsWith('compact-') && f.endsWith('.md'))
     .sort()
     .reverse();
-  for (const f of files.slice(10)) {
-    fs.unlinkSync(path.join(checkpointDir, f));
+  for (const f of files.slice(maxCheckpointFiles)) {
+    try { fs.unlinkSync(path.join(checkpointDir, f)); } catch {}
   }
 } catch {}
 

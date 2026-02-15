@@ -39,6 +39,8 @@ if [ -f "$SESSION_LOG" ]; then
   SESSION_LOG_AGE=0
   if command -v stat &>/dev/null; then
     SL_MOD=$(stat -c %Y "$SESSION_LOG" 2>/dev/null || stat -f %m "$SESSION_LOG" 2>/dev/null || echo "0")
+    # Validate stat output is numeric (Bug #9)
+    case "$SL_MOD" in ''|*[!0-9]*) SL_MOD=0 ;; esac
     NOW=$(date +%s)
     SESSION_LOG_AGE=$(( NOW - SL_MOD ))
   fi
@@ -101,6 +103,8 @@ if [ -f "$MIND_DIR/.last-activity" ] && [ -f "$MIND_DIR/STATE.md" ]; then
   STATE_AGE=0
   if command -v stat &>/dev/null; then
     STATE_MOD=$(stat -c %Y "$MIND_DIR/STATE.md" 2>/dev/null || stat -f %m "$MIND_DIR/STATE.md" 2>/dev/null || echo "0")
+    # Validate stat output is numeric (Bug #9)
+    case "$STATE_MOD" in ''|*[!0-9]*) STATE_MOD=0 ;; esac
     NOW=$(date +%s)
     STATE_AGE=$(( NOW - STATE_MOD ))
   fi

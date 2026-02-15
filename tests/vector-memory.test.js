@@ -72,10 +72,12 @@ const tests = [
 
   // --- Stemming ---
   test('stem reduces common suffixes', () => {
-    assert.equal(stem('running'), 'runn');
+    assert.equal(stem('running'), 'run');  // de-duplicated trailing consonant: runn -> run
+    assert.equal(stem('stopping'), 'stop');  // de-duplicated trailing consonant: stopp -> stop
     assert.equal(stem('decided'), 'decid');
     assert.equal(stem('authentication'), 'authenticat'); // 'ion' suffix removed
     assert.equal(stem('development'), 'develop');
+    assert.equal(stem('run'), 'run');  // short word preserved — matches stem('running')
   }),
 
   test('stem preserves short words', () => {
