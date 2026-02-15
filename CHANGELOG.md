@@ -2,6 +2,19 @@
 
 All notable changes to MemoryForge are documented here.
 
+## [1.2.0] - 2025-02-14
+
+### Wave 12: Semantic Search
+- Added TF-IDF vector memory engine (`scripts/vector-memory.js`) — zero dependencies
+- Hybrid `memory_search`: semantic (TF-IDF relevance ranking) + keyword (exact match) combined
+- File chunking with overlap for granular search within large files
+- Custom stemmer and stop word filtering for English markdown content
+- Serialization support (toJSON/fromJSON) for index caching
+- CLI mode: `node scripts/vector-memory.js .mind/ "search query"`
+- Graceful fallback: keyword-only search when vector module unavailable
+- Added 14 vector memory tests (tokenization, stemming, indexing, search, chunking)
+- **Total test count: 42 (14 vector + 19 MCP + 9 compression)**
+
 ## [1.1.0] - 2025-02-14
 
 ### Wave 11: Testing + CI

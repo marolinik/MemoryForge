@@ -97,13 +97,47 @@ function memoryStatus() {
   return { content: [{ type: 'text', text: state }] };
 }
 
+// --- Hybrid search: TF-IDF semantic + keyword fallback ---
+
+let vectorMemory = null;
+try {
+  vectorMemory = require('./vector-memory.js');
+} catch {
+  // vector-memory.js not available — keyword-only search
+}
+
 function memorySearch(args) {
-  const query = (args.query || '').toLowerCase().trim();
+  const query = (args.query || '').trim();
   if (!query) {
     return { content: [{ type: 'text', text: 'Error: query parameter is required.' }], isError: true };
   }
 
-  const files = ['STATE.md', 'PROGRESS.md', 'DECISIONS.md', 'SESSION-LOG.md'];
+  // If vector memory is available, use hybrid search (semantic + keyword)
+  if (vectorMemory) {
+    try {
+      const results = vectorMemory.hybridSearch(MIND_DIR, query, { limit: 15 });
+
+      if (results.length === 0) {
+        return { content: [{ type: 'text', text: `No results for "${query}" in .mind/ files.` }] };
+      }
+
+      let output = `Search results for "${query}" (${results.length} matches, hybrid semantic+keyword):\n\n`;
+      for (const r of results) {
+        const tag = r.source === 'semantic' ? `[relevance: ${r.score.toFixed(3)}]` : '[exact match]';
+        output += `--- ${r.file}:${r.lineStart} ${tag} ---\n`;
+        output += r.snippet + '\n\n';
+      }
+
+      return { content: [{ type: 'text', text: output }] };
+    } catch (err) {
+      logError('HybridSearchError', err);
+      // Fall through to keyword search
+    }
+  }
+
+  // Keyword-only fallback
+  const lowerQuery = query.toLowerCase();
+  const files = ['STATE.md', 'PROGRESS.md', 'DECISIONS.md', 'SESSION-LOG.md', 'ARCHIVE.md'];
   const results = [];
 
   for (const file of files) {
@@ -114,7 +148,7 @@ function memorySearch(args) {
     const matches = [];
 
     for (let i = 0; i < lines.length; i++) {
-      if (lines[i].toLowerCase().includes(query)) {
+      if (lines[i].toLowerCase().includes(lowerQuery)) {
         // Include context: 1 line before and after
         const start = Math.max(0, i - 1);
         const end = Math.min(lines.length - 1, i + 1);
@@ -132,10 +166,10 @@ function memorySearch(args) {
   }
 
   if (results.length === 0) {
-    return { content: [{ type: 'text', text: `No results for "${args.query}" in .mind/ files.` }] };
+    return { content: [{ type: 'text', text: `No results for "${query}" in .mind/ files.` }] };
   }
 
-  let output = `Search results for "${args.query}":\n\n`;
+  let output = `Search results for "${query}" (keyword match):\n\n`;
   for (const r of results) {
     output += `--- ${r.file} ---\n`;
     for (const m of r.matches) {
@@ -364,11 +398,11 @@ const TOOLS = [
   },
   {
     name: 'memory_search',
-    description: 'Search across all .mind/ files (STATE.md, PROGRESS.md, DECISIONS.md, SESSION-LOG.md) for a keyword or topic. Returns matching lines with context.',
+    description: 'Search across all .mind/ files using hybrid semantic + keyword matching. Finds results by meaning (TF-IDF) and exact keywords. Ask natural questions like "What did we decide about authentication?" or search for specific terms.',
     inputSchema: {
       type: 'object',
       properties: {
-        query: { type: 'string', description: 'Search term (case-insensitive)' }
+        query: { type: 'string', description: 'Search query — natural language or keywords' }
       },
       required: ['query']
     }

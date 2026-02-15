@@ -236,12 +236,13 @@ Create `scripts/vector-memory.js`:
 - `memory_search` upgrade: falls back to keyword when vector unavailable
 
 Files to CREATE:
-- [ ] scripts/vector-memory.js — TF-IDF indexer + search
-- [ ] scripts/extensions/vector-search-server.js — MCP server extension
+- [x] scripts/vector-memory.js — TF-IDF indexer + search + chunking + CLI
+- [ ] scripts/extensions/vector-search-server.js — MCP server extension (deferred — integrated directly)
+- [x] tests/vector-memory.test.js — 14 tests for tokenization, stemming, indexing, search, chunking
 
 Files to MODIFY:
-- [ ] scripts/mcp-memory-server.js — hybrid search in memory_search
-- [ ] install.sh / install.ps1 — --with-vector flag wiring
+- [x] scripts/mcp-memory-server.js — hybrid search in memory_search (auto-fallback to keyword)
+- [ ] install.sh / install.ps1 — --with-vector flag wiring (N/A — vector memory is auto-detected)
 
 ---
 
