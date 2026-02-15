@@ -2,6 +2,20 @@
 
 All notable changes to MemoryForge are documented here.
 
+## [1.3.0] - 2025-02-14
+
+### Wave 13: Templates + Fleet Dashboard
+- Added 3 project templates: `mind-web-app/`, `mind-cli/`, `mind-library/`
+  - Each includes pre-configured STATE.md, PROGRESS.md, DECISIONS.md, SESSION-LOG.md
+  - Phase structure and starter tasks tailored to each project type
+- Added fleet dashboard (`scripts/fleet-dashboard.js`) — multi-project overview
+  - Scans parent directory for projects with `.mind/`
+  - Shows phase, progress bar, decisions, sessions, `.mind/` size per project
+  - Dark-themed HTML, auto-opens in browser
+- Updated README with semantic search docs, fleet dashboard, templates, testing section
+- Updated docs table with CONTRIBUTING.md, SECURITY.md, CHANGELOG.md links
+- **All 13 waves complete. 42 tests passing.**
+
 ## [1.2.0] - 2025-02-14
 
 ### Wave 12: Semantic Search

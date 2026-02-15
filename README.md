@@ -177,6 +177,23 @@ your-project/
     └── checkpoints/           # Auto-managed compaction snapshots
 ```
 
+### Semantic Search
+
+The `memory_search` MCP tool uses **hybrid search** — combining TF-IDF semantic relevance with exact keyword matching. Ask natural questions:
+
+```
+memory_search("What did we decide about authentication?")
+memory_search("blocked tasks")
+memory_search("database migration strategy")
+```
+
+Results are ranked by relevance, not just keyword occurrence. Falls back to keyword-only search gracefully.
+
+CLI mode:
+```bash
+node scripts/vector-memory.js .mind/ "authentication decisions"
+```
+
 ### Dashboard
 
 Visualize your project's memory state in the browser:
@@ -186,6 +203,29 @@ node scripts/dashboard.js .mind/
 ```
 
 Generates a dark-themed HTML dashboard with progress stats, session counts, decision log, and full state file display. Use `--no-open` to skip auto-opening the browser.
+
+### Fleet Dashboard
+
+Monitor multiple MemoryForge projects from a single view:
+
+```bash
+node scripts/fleet-dashboard.js ~/Projects
+```
+
+Scans a parent directory for projects with `.mind/` directories and generates a fleet overview showing phase, progress, decisions, sessions, and `.mind/` size for each project.
+
+### Project Templates
+
+Start new projects with pre-configured `.mind/` files:
+
+```bash
+# Copy a template to your new project
+cp -r MemoryForge/templates/mind-web-app/ your-project/.mind/
+cp -r MemoryForge/templates/mind-cli/ your-project/.mind/
+cp -r MemoryForge/templates/mind-library/ your-project/.mind/
+```
+
+Templates include STATE.md, PROGRESS.md, DECISIONS.md, and SESSION-LOG.md pre-populated with phase structure and starter tasks for each project type.
 
 ### Session Compression
 
@@ -402,6 +442,20 @@ Yes, and you should. The state files are Markdown designed for git. Auto-generat
 
 ---
 
+## Testing
+
+42 tests, zero dependencies — all using Node.js built-in `assert`:
+
+```bash
+node tests/mcp-server.test.js     # 19 tests — all 6 MCP tools + transport + security
+node tests/compress.test.js       # 9 tests  — compression, archival, rotation
+node tests/vector-memory.test.js  # 14 tests — TF-IDF, tokenization, hybrid search
+```
+
+CI runs on every push: macOS + Linux + Windows, Node 18/20/22.
+
+---
+
 ## Documentation
 
 | Doc | What's In It |
@@ -412,17 +466,20 @@ Yes, and you should. The state files are Markdown designed for git. Auto-generat
 | [`docs/COMPETITIVE-ANALYSIS.md`](docs/COMPETITIVE-ANALYSIS.md) | Full competitive landscape (9 tools benchmarked) |
 | [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) | Common issues and fixes |
 | [`templates/CLAUDE.md.template`](templates/CLAUDE.md.template) | Mind Protocol section for your CLAUDE.md |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | Dev setup, testing, PR process |
+| [`SECURITY.md`](SECURITY.md) | Security policy and threat model |
+| [`CHANGELOG.md`](CHANGELOG.md) | Version history (Waves 1-13) |
 
 ---
 
 ## Contributing
 
-Contributions welcome. Please open an issue first to discuss what you'd like to change.
+Contributions welcome! See [`CONTRIBUTING.md`](CONTRIBUTING.md) for dev setup, testing, and guidelines.
 
 1. Fork it
 2. Create your feature branch (`git checkout -b feature/amazing`)
-3. Commit your changes
-4. Push to the branch (`git push origin feature/amazing`)
+3. Run tests: `node tests/mcp-server.test.js && node tests/compress.test.js && node tests/vector-memory.test.js`
+4. Commit your changes
 5. Open a pull request
 
 ---

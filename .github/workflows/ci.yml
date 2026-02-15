@@ -30,6 +30,9 @@ jobs:
       - name: Run compression tests
         run: node tests/compress.test.js
 
+      - name: Run vector memory tests
+        run: node tests/vector-memory.test.js
+
   lint:
     runs-on: ubuntu-latest
     steps:
@@ -45,6 +48,8 @@ jobs:
           node --check scripts/mcp-memory-server.js
           node --check scripts/compress-sessions.js
           node --check scripts/dashboard.js
+          node --check scripts/vector-memory.js
+          node --check scripts/fleet-dashboard.js
 
       - name: Verify JSON templates
         run: node -e "JSON.parse(require('fs').readFileSync('templates/memoryforge.config.json.template','utf-8'));console.log('Valid JSON')"

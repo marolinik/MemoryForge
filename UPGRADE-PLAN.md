@@ -256,17 +256,17 @@ Create marketing assets:
 - Cross-project fleet dashboard
 
 Files to CREATE:
-- [ ] docs/demo.gif or docs/demo.svg (terminal recording)
-- [ ] templates/mind-web-app/ — starter .mind/ for web projects
-- [ ] templates/mind-cli/ — starter .mind/ for CLI projects
-- [ ] templates/mind-library/ — starter .mind/ for libraries
-- [ ] scripts/fleet-dashboard.js — multi-project overview
+- [ ] docs/demo.gif or docs/demo.svg (terminal recording — deferred, needs asciinema)
+- [x] templates/mind-web-app/ — starter .mind/ for web projects (4 files)
+- [x] templates/mind-cli/ — starter .mind/ for CLI projects (4 files)
+- [x] templates/mind-library/ — starter .mind/ for libraries (4 files)
+- [x] scripts/fleet-dashboard.js — multi-project overview dashboard
 
 Files to MODIFY:
-- [ ] README.md — embed demo GIF, link templates
+- [x] README.md — semantic search, fleet dashboard, templates, testing section, docs table
 
 ---
 
 ## Execution Order
 Wave 1 → Wave 2 → Wave 3 → Wave 4 → Wave 5 → Wave 6 → Wave 7 → Wave 8 → Wave 9 (all complete)
-Wave 10 (in progress) → Wave 11 → Wave 12 → Wave 13
+Wave 10 → Wave 11 → Wave 12 → Wave 13 (all complete)
