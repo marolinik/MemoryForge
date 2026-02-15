@@ -340,6 +340,38 @@ Claude: "I'll record that we chose JWT over sessions."
 → "Decision DEC-005 saved."
 ```
 
+### Dashboard
+
+Visualize your project's memory state in the browser:
+
+```bash
+node scripts/dashboard.js .mind/
+```
+
+Generates a single static HTML file (`.mind/dashboard.html`) with:
+- Progress bar with task completion stats
+- Session count, decision count, current phase
+- Full content of all 4 state files in a dark-themed grid layout
+
+No server needed — all data is embedded in the HTML. Use `--no-open` to skip auto-opening the browser.
+
+### Session Compression
+
+As projects grow, `.mind/` files can get large. The compressor keeps things lean:
+
+```bash
+# Preview what would be compressed
+node scripts/compress-sessions.js --dry-run .mind/
+
+# Run compression
+node scripts/compress-sessions.js .mind/
+```
+
+- **SESSION-LOG.md:** Keeps last 5 sessions in full, summarizes older entries to 1 line each
+- **DECISIONS.md:** Keeps last 10 decisions in full, archives older to 1 line each
+- Reports token savings after compression
+- Auto-triggered on session start when `.mind/` files exceed ~3000 tokens
+
 ---
 
 ## Extensions

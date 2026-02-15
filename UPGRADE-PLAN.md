@@ -87,11 +87,11 @@ Create `scripts/dashboard.js`:
 - No server needed (all data embedded in HTML)
 
 Files to CREATE:
-- [ ] scripts/dashboard.js
+- [x] scripts/dashboard.js
 
 Files to MODIFY:
-- [ ] README.md — document dashboard
-- [ ] install.sh / install.ps1 — mention in post-install
+- [x] README.md — document dashboard + compression
+- [x] install.sh / install.ps1 — .gitignore includes dashboard.html
 
 ---
 

@@ -605,6 +605,7 @@ else
     ".mind/.task-completions"
     ".mind/.session-tracking"
     ".mind/.file-tracker"
+    ".mind/dashboard.html"
     ".mind/checkpoints/"
   )
 
