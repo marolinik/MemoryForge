@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        node-version: [18, 20, 22]
+      fail-fast: false
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      - name: Run MCP server tests
+        run: node tests/mcp-server.test.js
+
+      - name: Run compression tests
+        run: node tests/compress.test.js
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Check for syntax errors
+        run: |
+          node --check scripts/mcp-memory-server.js
+          node --check scripts/compress-sessions.js
+          node --check scripts/dashboard.js
+
+      - name: Verify JSON templates
+        run: node -e "JSON.parse(require('fs').readFileSync('templates/memoryforge.config.json.template','utf-8'));console.log('Valid JSON')"

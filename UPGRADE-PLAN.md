@@ -216,13 +216,13 @@ Create contributor docs:
 - CHANGELOG.md (retroactive for Waves 1-10)
 
 Files to CREATE:
-- [ ] tests/mcp-server.test.js — MCP tool unit tests
-- [ ] tests/compress.test.js — compression/archival unit tests
-- [ ] tests/hooks.test.js — hook chain integration tests
-- [ ] .github/workflows/ci.yml — GitHub Actions
-- [ ] CONTRIBUTING.md
-- [ ] SECURITY.md
-- [ ] CHANGELOG.md
+- [x] tests/mcp-server.test.js — MCP tool unit tests (19 tests)
+- [x] tests/compress.test.js — compression/archival unit tests (9 tests)
+- [ ] tests/hooks.test.js — hook chain integration tests (deferred — hooks are bash, tested manually)
+- [x] .github/workflows/ci.yml — GitHub Actions (3 OS x 3 Node versions + lint)
+- [x] CONTRIBUTING.md
+- [x] SECURITY.md
+- [x] CHANGELOG.md (retroactive Waves 1-11)
 
 ---
 
