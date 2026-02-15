@@ -8,6 +8,7 @@
     <a href="#quick-start">Quick Start</a> &middot;
     <a href="#how-it-works">How It Works</a> &middot;
     <a href="#installation-tiers">Installation Tiers</a> &middot;
+    <a href="#existing-projects">Existing Projects</a> &middot;
     <a href="#extensions">Extensions</a> &middot;
     <a href="docs/ARCHITECTURE.md">Architecture</a>
   </p>
@@ -143,15 +144,107 @@ bash install.sh /path/to/project-b
 
 ### All Flags
 
-| Flag | Bash | PowerShell |
+| Flag | Bash | PowerShell | Description |
+|:---|:---|:---|:---|
+| Core only | `bash install.sh [dir]` | `.\install.ps1 -TargetDir dir` | Hooks + state files + Mind agent |
+| + Team agents | `--with-team` | `-WithTeam` | Add orchestrator + builder agents |
+| + Vector memory | `--with-vector` | `-WithVector` | Add semantic search extension |
+| + Graph memory | `--with-graph` | `-WithGraph` | Add Neo4j graph extension |
+| All extensions | `--full` | `-Full` | Core + all extensions |
+| User-level | `--global` | `-Global` | Install to `~/.claude/` for all projects |
+| Dry run | `--dry-run` | `-DryRun` | Preview changes without writing files |
+| Inject CLAUDE.md | `--inject-claude-md` | `-InjectClaudeMd` | Append Mind Protocol to CLAUDE.md |
+| Uninstall | `--uninstall` | `-Uninstall` | Cleanly remove MemoryForge |
+| Help | `--help` | -- | Show usage information |
+
+---
+
+## Existing Projects
+
+MemoryForge is designed to install safely into projects that already have Claude Code configuration, other memory tools, or existing hooks.
+
+### Smart Settings Merge
+
+If your project already has `.claude/settings.json` with its own hooks, the installer **smart-merges** MemoryForge hooks alongside yours instead of overwriting:
+
+```bash
+# Preview what would change first
+bash install.sh /path/to/project --dry-run
+
+# Install — existing hooks are preserved, MF hooks added alongside
+bash install.sh /path/to/project
+```
+
+The merge logic:
+- Detects existing hook groups per event (SessionStart, PreCompact, etc.)
+- Appends MemoryForge hooks to existing groups when matchers are compatible
+- Adds as separate groups when matchers differ
+- Creates a backup (`settings.json.backup`) before modifying
+- Skips events where MemoryForge hooks are already present
+
+### Competitor Detection
+
+The installer automatically detects other Claude Code memory systems:
+
+| System | Detection | Coexistence |
 |:---|:---|:---|
-| Core only | `bash install.sh [dir]` | `.\install.ps1 -TargetDir dir` |
-| + Team agents | `--with-team` | `-WithTeam` |
-| + Vector memory | `--with-vector` | `-WithVector` |
-| + Graph memory | `--with-graph` | `-WithGraph` |
-| All extensions | `--full` | `-Full` |
-| User-level | `--global` | `-Global` |
-| Help | `--help` | — |
+| claude-mem | `.claude-memory` or `.claude-mem` directory | Compatible |
+| MEMORY.md | `MEMORY.md` in project root | Compatible |
+| Continuous-Claude | `.claude/ledger` directory | Check for hook conflicts |
+| super-claude-kit | `.toon` directory or `TOON.md` | Compatible |
+| claude-cognitive | Cognitive references in settings | Check for hook conflicts |
+| MCP memory servers | MCP references in settings | Compatible |
+
+When detected, the installer shows a warning with coexistence guidance before proceeding.
+
+### Dry Run
+
+Preview every change the installer would make, without modifying any files:
+
+```bash
+bash install.sh /path/to/project --dry-run
+```
+
+```powershell
+.\install.ps1 -TargetDir "C:\project" -DryRun
+```
+
+Output shows `[dry-run]` prefixed actions — what would be created, merged, or skipped.
+
+### CLAUDE.md Integration
+
+Automatically append the Mind Protocol section to your existing `CLAUDE.md`:
+
+```bash
+bash install.sh /path/to/project --inject-claude-md
+```
+
+- Detects if Mind Protocol is already present (skips if so)
+- Appends the template section to existing content
+- Creates `CLAUDE.md` from template if none exists
+
+### Uninstall
+
+Cleanly remove MemoryForge without losing your project data:
+
+```bash
+bash install.sh /path/to/project --uninstall
+
+# Preview what would be removed
+bash install.sh /path/to/project --uninstall --dry-run
+```
+
+What gets removed:
+- Hook scripts (8 files)
+- MemoryForge entries from `settings.json` (other hooks preserved)
+- MemoryForge agents (only if they contain MF signatures)
+- Tracking files (`.last-activity`, `.agent-activity`, etc.)
+- Checkpoint directory
+
+What gets **preserved**:
+- `.mind/STATE.md`, `PROGRESS.md`, `DECISIONS.md`, `SESSION-LOG.md` — these are your project data
+- Your existing hooks in `settings.json`
+- Any agents not created by MemoryForge
 
 ---
 
@@ -284,7 +377,7 @@ Extensions may have additional requirements (LanceDB, ChromaDB, Docker for Neo4j
 <details>
 <summary><strong>Does this work on Windows?</strong></summary>
 
-Yes. Hook scripts use bash (Git Bash, included with Git for Windows) and node. Both are standard developer tools on Windows.
+Yes. Hook scripts use bash (Git Bash, included with Git for Windows) and node. Both are standard developer tools on Windows. The PowerShell installer (`install.ps1`) provides native Windows support with all the same features.
 </details>
 
 <details>
@@ -302,7 +395,13 @@ Typically 500-2,000 tokens, depending on `.mind/` file sizes. The hooks extract 
 <details>
 <summary><strong>Can I use this with existing hooks?</strong></summary>
 
-Yes. If you already have `.claude/settings.json`, the installer saves a reference config (`settings.memoryforge.json`) and you merge manually. Claude Code supports multiple hooks per event.
+Yes. The installer uses **smart merge** to add MemoryForge hooks alongside your existing ones. It detects per-event hook groups, appends rather than replaces, and creates a backup before any modification. Use `--dry-run` to preview changes first.
+</details>
+
+<details>
+<summary><strong>What about other memory tools (claude-mem, Continuous-Claude, etc.)?</strong></summary>
+
+The installer automatically detects 6+ known memory systems and reports coexistence compatibility. Most tools serve different purposes and coexist without conflict. The installer warns about potential hook conflicts where they exist.
 </details>
 
 <details>
@@ -327,6 +426,12 @@ Yes, and you should. The human-edited state files (STATE.md, PROGRESS.md, DECISI
 <summary><strong>What's the difference between --global and project-level?</strong></summary>
 
 Project-level installs hooks into `your-project/.claude/` — only that project gets memory. Global (`--global`) installs into `~/.claude/` — every Claude Code project gets memory hooks. State files (`.mind/`) are always per-project regardless.
+</details>
+
+<details>
+<summary><strong>How do I uninstall?</strong></summary>
+
+Run `bash install.sh /path/to/project --uninstall`. This removes hooks, agents, and tracking files while preserving your `.mind/` state files (STATE.md, PROGRESS.md, etc.). Use `--uninstall --dry-run` to preview what would be removed.
 </details>
 
 <details>
