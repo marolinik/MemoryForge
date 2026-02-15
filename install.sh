@@ -13,7 +13,7 @@
 #
 # Brownfield features:
 #   bash install.sh [target-dir] --dry-run        # Preview changes only
-#   bash install.sh [target-dir] --inject-claude-md  # Append Mind Protocol to CLAUDE.md
+#   bash install.sh [target-dir] --no-claude-md   # Skip CLAUDE.md injection
 #   bash install.sh [target-dir] --uninstall      # Remove MemoryForge cleanly
 #
 # Docs: https://github.com/marolinik/MemoryForge
@@ -37,7 +37,7 @@ WITH_TEAM=false
 WITH_VECTOR=false
 WITH_GRAPH=false
 DRY_RUN=false
-INJECT_CLAUDE_MD=false
+NO_CLAUDE_MD=false
 UNINSTALL=false
 TARGET_ARG=""
 
@@ -49,7 +49,7 @@ for arg in "$@"; do
     --with-graph)       WITH_GRAPH=true ;;
     --full)             WITH_TEAM=true; WITH_VECTOR=true; WITH_GRAPH=true ;;
     --dry-run)          DRY_RUN=true ;;
-    --inject-claude-md) INJECT_CLAUDE_MD=true ;;
+    --no-claude-md)     NO_CLAUDE_MD=true ;;
     --uninstall)        UNINSTALL=true ;;
     --help|-h)
       echo "Usage: bash install.sh [target-dir] [flags]"
@@ -63,7 +63,7 @@ for arg in "$@"; do
       echo ""
       echo "Brownfield flags:"
       echo "  --dry-run          Preview what would change (no writes)"
-      echo "  --inject-claude-md Append Mind Protocol to existing CLAUDE.md"
+      echo "  --no-claude-md     Skip adding Mind Protocol to CLAUDE.md"
       echo "  --uninstall        Remove MemoryForge from the project"
       echo ""
       echo "  --help             Show this help"
@@ -320,12 +320,15 @@ if [ "$GLOBAL" != true ]; then
   fi
 fi
 
-# Calculate total steps
-total_steps=5
+# Calculate total steps (6 base steps for project-level, 5 for global)
+if [ "$GLOBAL" = true ] || [ "$NO_CLAUDE_MD" = true ]; then
+  total_steps=5
+else
+  total_steps=6
+fi
 [ "$WITH_TEAM" = true ]   && total_steps=$((total_steps + 1))
 [ "$WITH_VECTOR" = true ] && total_steps=$((total_steps + 1))
 [ "$WITH_GRAPH" = true ]  && total_steps=$((total_steps + 1))
-[ "$INJECT_CLAUDE_MD" = true ] && total_steps=$((total_steps + 1))
 
 # =============================================================================
 # STEP 1: Hook scripts
@@ -367,9 +370,6 @@ if [ -f "$SETTINGS_PATH" ]; then
     skip ".claude/settings.json already has MemoryForge hooks"
   else
     # Smart merge
-    MERGE_FLAGS=""
-    [ "$DRY_RUN" = true ] && MERGE_FLAGS="--dry-run"
-
     if [ "$DRY_RUN" = true ]; then
       dry "Would smart-merge MemoryForge hooks into existing settings.json"
       node "$SCRIPT_DIR/scripts/merge-settings.js" "$SETTINGS_PATH" "$MF_SETTINGS" --dry-run 2>/dev/null | node -e "
@@ -493,6 +493,40 @@ else
 fi
 
 # =============================================================================
+# STEP 6: CLAUDE.md — Mind Protocol (default for project-level)
+# =============================================================================
+if [ "$GLOBAL" != true ] && [ "$NO_CLAUDE_MD" != true ]; then
+  step "Adding Mind Protocol to CLAUDE.md..."
+
+  CLAUDE_MD="$TARGET_DIR/CLAUDE.md"
+  TEMPLATE="$SCRIPT_DIR/templates/CLAUDE.md.template"
+
+  if [ ! -f "$TEMPLATE" ]; then
+    warn "Template not found: $TEMPLATE"
+  elif [ -f "$CLAUDE_MD" ] && grep -q "\.mind/STATE\.md\|Mind Protocol\|MemoryForge" "$CLAUDE_MD" 2>/dev/null; then
+    skip "CLAUDE.md already has Mind Protocol / MemoryForge references"
+  elif [ -f "$CLAUDE_MD" ]; then
+    if [ "$DRY_RUN" = true ]; then
+      dry "Would append Mind Protocol section to existing CLAUDE.md"
+      TEMPLATE_LINES=$(wc -l < "$TEMPLATE")
+      dry "(~$TEMPLATE_LINES lines from templates/CLAUDE.md.template)"
+    else
+      echo "" >> "$CLAUDE_MD"
+      echo "" >> "$CLAUDE_MD"
+      cat "$TEMPLATE" >> "$CLAUDE_MD"
+      ok "Appended Mind Protocol to existing CLAUDE.md"
+    fi
+  else
+    if [ "$DRY_RUN" = true ]; then
+      dry "Would create CLAUDE.md with Mind Protocol"
+    else
+      cp "$TEMPLATE" "$CLAUDE_MD"
+      ok "Created CLAUDE.md with Mind Protocol"
+    fi
+  fi
+fi
+
+# =============================================================================
 # EXTENSIONS
 # =============================================================================
 
@@ -553,40 +587,6 @@ if [ "$WITH_GRAPH" = true ]; then
 fi
 
 # =============================================================================
-# INJECT CLAUDE.MD (optional)
-# =============================================================================
-if [ "$INJECT_CLAUDE_MD" = true ]; then
-  step "Injecting Mind Protocol into CLAUDE.md..."
-
-  CLAUDE_MD="$TARGET_DIR/CLAUDE.md"
-  TEMPLATE="$SCRIPT_DIR/templates/CLAUDE.md.template"
-
-  if [ ! -f "$TEMPLATE" ]; then
-    warn "Template not found: $TEMPLATE"
-  elif [ -f "$CLAUDE_MD" ] && grep -q "\.mind/STATE\.md\|Mind Protocol\|MemoryForge" "$CLAUDE_MD" 2>/dev/null; then
-    skip "CLAUDE.md already has Mind Protocol / MemoryForge references"
-  elif [ -f "$CLAUDE_MD" ]; then
-    if [ "$DRY_RUN" = true ]; then
-      dry "Would append Mind Protocol section to existing CLAUDE.md"
-      TEMPLATE_LINES=$(wc -l < "$TEMPLATE")
-      dry "(~$TEMPLATE_LINES lines from templates/CLAUDE.md.template)"
-    else
-      echo "" >> "$CLAUDE_MD"
-      echo "" >> "$CLAUDE_MD"
-      cat "$TEMPLATE" >> "$CLAUDE_MD"
-      ok "Appended Mind Protocol section to CLAUDE.md"
-    fi
-  else
-    if [ "$DRY_RUN" = true ]; then
-      dry "Would create CLAUDE.md from template"
-    else
-      cp "$TEMPLATE" "$CLAUDE_MD"
-      ok "Created CLAUDE.md with Mind Protocol section"
-    fi
-  fi
-fi
-
-# =============================================================================
 # Summary
 # =============================================================================
 echo ""
@@ -605,26 +605,22 @@ echo -e "    ${GREEN}+${NC} Mind agent"
 if [ "$GLOBAL" != true ]; then
   echo -e "    ${GREEN}+${NC} .mind/ state files (4 templates)"
   echo -e "    ${GREEN}+${NC} .gitignore entries"
+  if [ "$NO_CLAUDE_MD" != true ]; then
+    echo -e "    ${GREEN}+${NC} Mind Protocol in CLAUDE.md"
+  fi
 fi
 [ "$WITH_TEAM" = true ]   && echo -e "    ${GREEN}+${NC} Team agents (orchestrator + builder)"
 [ "$WITH_VECTOR" = true ] && echo -e "    ${GREEN}+${NC} Vector memory extension"
 [ "$WITH_GRAPH" = true ]  && echo -e "    ${GREEN}+${NC} Graph memory extension (Neo4j)"
-[ "$INJECT_CLAUDE_MD" = true ] && echo -e "    ${GREEN}+${NC} Mind Protocol in CLAUDE.md"
 
 echo ""
 echo -e "  ${BOLD}Next steps:${NC}"
-if [ "$INJECT_CLAUDE_MD" != true ]; then
-  echo -e "    1. Add the Mind Protocol to your CLAUDE.md"
-  echo -e "       ${DIM}Run with --inject-claude-md or see templates/CLAUDE.md.template${NC}"
-else
-  echo -e "    1. Review the Mind Protocol section in your CLAUDE.md"
-fi
 if [ "$GLOBAL" != true ]; then
-  echo -e "    2. Edit .mind/STATE.md with your project's current state"
-  echo -e "    3. Run ${CYAN}claude${NC} — the session-start hook fires automatically"
+  echo -e "    1. Edit .mind/STATE.md with your project's current state"
+  echo -e "    2. Run ${CYAN}claude${NC} — the session-start hook fires automatically"
 else
-  echo -e "    2. Run ${CYAN}claude${NC} in any project — hooks fire automatically"
-  echo -e "    3. Create .mind/ per-project: ${CYAN}bash install.sh /path/to/project${NC}"
+  echo -e "    1. Run ${CYAN}claude${NC} in any project — hooks fire automatically"
+  echo -e "    2. Create .mind/ per-project: ${CYAN}bash install.sh /path/to/project${NC}"
 fi
 echo ""
 echo -e "  ${DIM}Docs: https://github.com/marolinik/MemoryForge${NC}"

@@ -11,7 +11,7 @@
 #
 # Brownfield features:
 #   .\install.ps1 -DryRun                                # Preview changes only
-#   .\install.ps1 -InjectClaudeMd                        # Append Mind Protocol to CLAUDE.md
+#   .\install.ps1 -NoClaudeMd                            # Skip CLAUDE.md injection
 #   .\install.ps1 -Uninstall                             # Remove MemoryForge cleanly
 #
 # Docs: https://github.com/marolinik/MemoryForge
@@ -25,7 +25,7 @@ param(
     [switch]$WithGraph,
     [switch]$Full,
     [switch]$DryRun,
-    [switch]$InjectClaudeMd,
+    [switch]$NoClaudeMd,
     [switch]$Uninstall
 )
 
@@ -259,8 +259,9 @@ if (-not $Global) {
 }
 
 # Calculate total steps
+# Base: 5 steps + CLAUDE.md (step 6) for project-level installs (unless --no-claude-md)
 $totalSteps = 5 + $extNames.Count
-if ($InjectClaudeMd) { $totalSteps++ }
+if (-not $Global -and -not $NoClaudeMd) { $totalSteps++ }
 
 # =============================================================================
 # STEP 1: Hook scripts
@@ -497,10 +498,10 @@ if ($WithGraph) {
 }
 
 # =============================================================================
-# INJECT CLAUDE.MD (optional)
+# STEP 6: CLAUDE.md — Mind Protocol (default for project-level installs)
 # =============================================================================
-if ($InjectClaudeMd) {
-    Step "Injecting Mind Protocol into CLAUDE.md..."
+if (-not $Global -and -not $NoClaudeMd) {
+    Step "Adding Mind Protocol to CLAUDE.md..."
 
     $claudeMdPath = Join-Path $TargetDir "CLAUDE.md"
     $templatePath = Join-Path $ScriptDir "templates\CLAUDE.md.template"
@@ -552,15 +553,15 @@ if (-not $Global) {
 if ($WithTeam)   { Write-Host "    + Team agents (orchestrator + builder)" -ForegroundColor Green }
 if ($WithVector) { Write-Host "    + Vector memory extension" -ForegroundColor Green }
 if ($WithGraph)  { Write-Host "    + Graph memory extension (Neo4j)" -ForegroundColor Green }
-if ($InjectClaudeMd) { Write-Host "    + Mind Protocol in CLAUDE.md" -ForegroundColor Green }
+if (-not $Global -and -not $NoClaudeMd) { Write-Host "    + Mind Protocol in CLAUDE.md" -ForegroundColor Green }
 
 Write-Host ""
 Write-Host "  Next steps:" -ForegroundColor White
-if (-not $InjectClaudeMd) {
-    Write-Host "    1. Add the Mind Protocol to your CLAUDE.md"
-    Write-Host "       Run with -InjectClaudeMd or see templates\CLAUDE.md.template" -ForegroundColor DarkGray
-} else {
+if (-not $Global -and -not $NoClaudeMd) {
     Write-Host "    1. Review the Mind Protocol section in your CLAUDE.md"
+} else {
+    Write-Host "    1. Add the Mind Protocol to your CLAUDE.md"
+    Write-Host "       See templates\CLAUDE.md.template" -ForegroundColor DarkGray
 }
 if (-not $Global) {
     Write-Host "    2. Edit .mind\STATE.md with your project's current state"

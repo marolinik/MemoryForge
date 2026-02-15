@@ -153,7 +153,7 @@ bash install.sh /path/to/project-b
 | All extensions | `--full` | `-Full` | Core + all extensions |
 | User-level | `--global` | `-Global` | Install to `~/.claude/` for all projects |
 | Dry run | `--dry-run` | `-DryRun` | Preview changes without writing files |
-| Inject CLAUDE.md | `--inject-claude-md` | `-InjectClaudeMd` | Append Mind Protocol to CLAUDE.md |
+| Skip CLAUDE.md | `--no-claude-md` | `-NoClaudeMd` | Skip Mind Protocol injection into CLAUDE.md |
 | Uninstall | `--uninstall` | `-Uninstall` | Cleanly remove MemoryForge |
 | Help | `--help` | -- | Show usage information |
 
@@ -213,15 +213,12 @@ Output shows `[dry-run]` prefixed actions — what would be created, merged, or 
 
 ### CLAUDE.md Integration
 
-Automatically append the Mind Protocol section to your existing `CLAUDE.md`:
-
-```bash
-bash install.sh /path/to/project --inject-claude-md
-```
+The installer **automatically** adds the Mind Protocol section to your `CLAUDE.md` during project-level installs. This is essential — it tells Claude to read `.mind/` files at session start and update them at session end.
 
 - Detects if Mind Protocol is already present (skips if so)
-- Appends the template section to existing content
+- Appends the template section to existing `CLAUDE.md`
 - Creates `CLAUDE.md` from template if none exists
+- Skip with `--no-claude-md` if you want to manage `CLAUDE.md` manually
 
 ### Uninstall
 
@@ -290,6 +287,7 @@ Task(subagent_type: "mind", prompt: "Update .mind/ with what we did this session
 
 ```
 your-project/
+├── CLAUDE.md                  # Mind Protocol section (appended or created)
 ├── .claude/
 │   ├── settings.json          # Hook configuration (8 hooks wired)
 │   └── agents/
