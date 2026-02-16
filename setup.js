@@ -17,7 +17,7 @@ const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
 
-const VERSION = '2.0.0';
+const VERSION = '2.0.1';
 const SCRIPT_DIR = __dirname;
 
 // --- Colors (auto-detect terminal support) ---
@@ -135,7 +135,7 @@ function mergeSettings(existingPath, mfSettingsPath) {
   const mf = JSON.parse(fs.readFileSync(mfSettingsPath, 'utf-8'));
 
   // Check if already installed
-  if (JSON.stringify(existing).includes('session-start.sh')) {
+  if (JSON.stringify(existing).includes('session-start.sh') || JSON.stringify(existing).includes('session-start.js')) {
     return { result: 'skip' };
   }
 
@@ -272,7 +272,7 @@ async function main() {
     const srcHooksDir = path.join(SCRIPT_DIR, 'scripts', 'hooks');
     let hooksCopied = 0;
     for (const file of fs.readdirSync(srcHooksDir)) {
-      if (file.endsWith('.sh')) {
+      if (file.endsWith('.sh') || file.endsWith('.js')) {
         if (!DRY_RUN) fs.copyFileSync(path.join(srcHooksDir, file), path.join(hooksDir, file));
         hooksCopied++;
       }

@@ -24,7 +24,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$MemoryForgeVersion = "2.0.0"
+$MemoryForgeVersion = "2.0.1"
 
 # --- Help ---
 if ($Help) {

@@ -151,6 +151,33 @@ bash install.sh /path/to/project --uninstall
 
 Removes hooks, scripts, and tracking files. Preserves `.mind/STATE.md`, `PROGRESS.md`, `DECISIONS.md`, `SESSION-LOG.md`.
 
+### Updating
+
+Re-run the installer over an existing installation. It detects the previous version and upgrades in place:
+
+```bash
+# Pull the latest release
+cd MemoryForge
+git pull
+
+# Re-install (project-level)
+bash install.sh /path/to/your/project
+
+# Re-install (user-level)
+bash install.sh --global
+
+# Windows PowerShell
+.\install.ps1 -TargetDir "C:\path\to\your\project"
+.\install.ps1 -Global
+```
+
+What happens on update:
+- Hook scripts are overwritten with the latest version
+- `.claude/settings.json` hooks are smart-merged (existing hooks preserved)
+- `.mind/` state files are **never** overwritten — your data is safe
+- `.memoryforge-version` is updated to track the installed version
+- Use `--dry-run` / `-DryRun` to preview changes before applying
+
 ---
 
 ## FAQ
@@ -164,13 +191,13 @@ Claude Code has `MEMORY.md` for notes and `CLAUDE.md` for instructions, but neit
 <details>
 <summary><strong>Does this work on Windows?</strong></summary>
 
-Yes. The PowerShell installer (`install.ps1`) provides native Windows support. Hook scripts require bash — install [Git for Windows](https://git-scm.com/download/win) which includes Git Bash.
+Yes. Hooks are pure Node.js — no bash required. The PowerShell installer (`install.ps1`) provides native Windows support.
 </details>
 
 <details>
 <summary><strong>Does this need an internet connection?</strong></summary>
 
-No. Everything is local files and shell scripts.
+No. Everything is local files and Node.js scripts.
 </details>
 
 <details>
