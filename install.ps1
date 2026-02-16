@@ -117,7 +117,8 @@ if ($Uninstall) {
         $hooksDir = Join-Path $TargetDir "scripts\hooks"
     }
 
-    $MfHooks = @("session-start.sh", "pre-compact.sh", "session-end.sh")
+    $MfHooks = @("session-start.sh", "pre-compact.sh", "session-end.sh",
+                  "session-start.js", "pre-compact.js", "session-end.js")
 
     foreach ($hook in $MfHooks) {
         $hookPath = Join-Path $hooksDir $hook
@@ -146,14 +147,14 @@ if ($Uninstall) {
     # 2. Remove MemoryForge hooks from settings.json
     $settingsPath = Join-Path $ClaudeDir "settings.json"
     if (Test-Path $settingsPath) {
-        if ((Get-Content $settingsPath -Raw) -match "session-start\.sh") {
+        if ((Get-Content $settingsPath -Raw) -match "session-start\.(sh|js)") {
             if ($DryRun) {
                 Dry "Would remove MemoryForge hooks from settings.json"
             } else {
                 Copy-Item $settingsPath "${settingsPath}.backup" -Force
                 $env:SETTINGS_FILE = ($settingsPath -replace '\\','/')
                 try {
-                    & node -e "const fs=require('fs');const p=process.env.SETTINGS_FILE;const s=JSON.parse(fs.readFileSync(p,'utf-8'));if(s.hooks){for(const[event,handlers]of Object.entries(s.hooks)){s.hooks[event]=handlers.filter(h=>!JSON.stringify(h).includes('session-start.sh')&&!JSON.stringify(h).includes('pre-compact.sh')&&!JSON.stringify(h).includes('session-end.sh'));if(s.hooks[event].length===0)delete s.hooks[event]}if(Object.keys(s.hooks).length===0)delete s.hooks}fs.writeFileSync(p,JSON.stringify(s,null,2)+'\n')" 2>$null
+                    & node -e "const fs=require('fs');const p=process.env.SETTINGS_FILE;const s=JSON.parse(fs.readFileSync(p,'utf-8'));if(s.hooks){for(const[event,handlers]of Object.entries(s.hooks)){s.hooks[event]=handlers.filter(h=>{const t=JSON.stringify(h);return !t.includes('memoryforge')&&!t.includes('session-start.sh')&&!t.includes('session-start.js')&&!t.includes('pre-compact.sh')&&!t.includes('pre-compact.js')&&!t.includes('session-end.sh')&&!t.includes('session-end.js')});if(s.hooks[event].length===0)delete s.hooks[event]}if(Object.keys(s.hooks).length===0)delete s.hooks}fs.writeFileSync(p,JSON.stringify(s,null,2)+'\n')" 2>$null
                     $env:SETTINGS_FILE = $null
                     Ok "Removed MemoryForge hooks from settings.json"
                 } catch {
@@ -350,7 +351,8 @@ if ($DryRun) {
 } else {
     New-Item -ItemType Directory -Force -Path $hooksDir | Out-Null
     Copy-Item "$ScriptDir\scripts\hooks\*.sh" $hooksDir -Force
-    Ok "Copied 3 hooks to $hooksDir"
+    Copy-Item "$ScriptDir\scripts\hooks\*.js" $hooksDir -Force
+    Ok "Copied hooks (sh + js) to $hooksDir"
 }
 
 # =============================================================================
@@ -361,18 +363,22 @@ Step "Configuring .claude\settings.json..."
 $settingsPath = Join-Path $ClaudeDir "settings.json"
 $mfSettings = "$ScriptDir\.claude\settings.json"
 
-# Prepare temp copy with global paths if needed
+# Prepare temp copy with absolute paths for global install (Node.js, no bash needed)
 $mfSettingsTemp = $null
 if ($Global) {
     $mfSettingsTemp = [System.IO.Path]::GetTempFileName()
-    (Get-Content $mfSettings -Raw) -replace '\$CLAUDE_PROJECT_DIR/scripts/hooks', '$HOME/.claude/hooks' |
+    $absHooksDir = ($hooksDir -replace '\\','/')
+    (Get-Content $mfSettings -Raw) `
+        -replace 'node scripts/hooks/session-start\.js', "node `"$absHooksDir/session-start.js`"" `
+        -replace 'node scripts/hooks/pre-compact\.js', "node `"$absHooksDir/pre-compact.js`"" `
+        -replace 'node scripts/hooks/session-end\.js', "node `"$absHooksDir/session-end.js`"" |
         Set-Content -Path $mfSettingsTemp -Encoding UTF8
     $mfSettings = $mfSettingsTemp
 }
 
 if (Test-Path $settingsPath) {
     $content = Get-Content $settingsPath -Raw
-    if ($content -match "session-start\.sh") {
+    if ($content -match "session-start\.(sh|js)") {
         Skip ".claude\settings.json already has MemoryForge hooks"
     } else {
         # Smart merge using inline Node.js

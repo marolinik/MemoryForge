@@ -160,7 +160,7 @@ if [ "$UNINSTALL" = true ]; then
     HOOKS_DIR="$TARGET_DIR/scripts/hooks"
   fi
 
-  MF_HOOKS="session-start.sh pre-compact.sh session-end.sh"
+  MF_HOOKS="session-start.sh pre-compact.sh session-end.sh session-start.js pre-compact.js session-end.js"
 
   for hook in $MF_HOOKS; do
     HOOK_PATH="$HOOKS_DIR/$hook"
@@ -191,7 +191,7 @@ if [ "$UNINSTALL" = true ]; then
   # 2. Remove MemoryForge hooks from settings.json
   SETTINGS_PATH="$CLAUDE_DIR/settings.json"
   if [ -f "$SETTINGS_PATH" ]; then
-    if grep -q "session-start.sh" "$SETTINGS_PATH" 2>/dev/null; then
+    if grep -qE "session-start\.(sh|js)" "$SETTINGS_PATH" 2>/dev/null; then
       if [ "$DRY_RUN" = true ]; then
         dry "Would remove MemoryForge hooks from settings.json"
       else
@@ -203,12 +203,13 @@ if [ "$UNINSTALL" = true ]; then
           const s = JSON.parse(fs.readFileSync(p, 'utf-8'));
           if (s.hooks) {
             for (const [event, handlers] of Object.entries(s.hooks)) {
-              s.hooks[event] = handlers.filter(h =>
-                !JSON.stringify(h).includes('memoryforge') &&
-                !JSON.stringify(h).includes('session-start.sh') &&
-                !JSON.stringify(h).includes('pre-compact.sh') &&
-                !JSON.stringify(h).includes('session-end.sh')
-              );
+              s.hooks[event] = handlers.filter(h => {
+                const str = JSON.stringify(h);
+                return !str.includes('memoryforge') &&
+                  !str.includes('session-start.sh') && !str.includes('session-start.js') &&
+                  !str.includes('pre-compact.sh') && !str.includes('pre-compact.js') &&
+                  !str.includes('session-end.sh') && !str.includes('session-end.js');
+              });
               if (s.hooks[event].length === 0) delete s.hooks[event];
             }
             if (Object.keys(s.hooks).length === 0) delete s.hooks;
@@ -377,8 +378,9 @@ if [ "$DRY_RUN" = true ]; then
 else
   mkdir -p "$HOOKS_DIR"
   cp "$SCRIPT_DIR/scripts/hooks/"*.sh "$HOOKS_DIR/"
+  cp "$SCRIPT_DIR/scripts/hooks/"*.js "$HOOKS_DIR/"
   chmod +x "$HOOKS_DIR/"*.sh
-  ok "Copied 3 hooks to ${HOOKS_DIR/$HOME/\~}"
+  ok "Copied hooks (sh + js) to ${HOOKS_DIR/$HOME/\~}"
 fi
 
 # =============================================================================
@@ -389,15 +391,19 @@ step "Configuring .claude/settings.json..."
 SETTINGS_PATH="$CLAUDE_DIR/settings.json"
 MF_SETTINGS="$SCRIPT_DIR/.claude/settings.json"
 
-# Prepare a temp copy of MF settings with correct paths for global
+# Prepare a temp copy of MF settings with absolute paths for global install
 if [ "$GLOBAL" = true ]; then
   MF_SETTINGS_TEMP=$(mktemp)
-  sed 's|\$CLAUDE_PROJECT_DIR/scripts/hooks|\$HOME/.claude/hooks|g' "$MF_SETTINGS" > "$MF_SETTINGS_TEMP"
+  ABS_HOOKS_DIR="$HOOKS_DIR"
+  sed -e "s|node scripts/hooks/session-start.js|node \"$ABS_HOOKS_DIR/session-start.js\"|g" \
+      -e "s|node scripts/hooks/pre-compact.js|node \"$ABS_HOOKS_DIR/pre-compact.js\"|g" \
+      -e "s|node scripts/hooks/session-end.js|node \"$ABS_HOOKS_DIR/session-end.js\"|g" \
+      "$MF_SETTINGS" > "$MF_SETTINGS_TEMP"
   MF_SETTINGS="$MF_SETTINGS_TEMP"
 fi
 
 if [ -f "$SETTINGS_PATH" ]; then
-  if grep -q "session-start.sh" "$SETTINGS_PATH" 2>/dev/null; then
+  if grep -qE "session-start\.(sh|js)" "$SETTINGS_PATH" 2>/dev/null; then
     skip ".claude/settings.json already has MemoryForge hooks"
   else
     # Smart merge using inline Node.js
