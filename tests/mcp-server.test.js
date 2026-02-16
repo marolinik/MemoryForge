@@ -109,7 +109,7 @@ function spawnServer(projectDir) {
 async function initServer(proc) {
   const initResp = await mcpCall(proc, 'initialize', {});
   assert.equal(initResp.result.serverInfo.name, 'memoryforge');
-  assert.equal(initResp.result.serverInfo.version, '2.0.1');
+  assert.equal(initResp.result.serverInfo.version, '2.0.2');
   // Send initialized notification (no response expected)
   const notif = JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' });
   const frame = `Content-Length: ${Buffer.byteLength(notif)}\r\n\r\n${notif}`;

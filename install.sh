@@ -18,7 +18,7 @@
 
 set -euo pipefail
 
-MEMORYFORGE_VERSION="2.0.1"
+MEMORYFORGE_VERSION="2.0.2"
 
 # --- Colors ---
 RED='\033[0;31m'
