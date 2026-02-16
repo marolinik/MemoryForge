@@ -33,6 +33,21 @@ try { input = fs.readFileSync(0, 'utf-8'); } catch {}
 let source = 'startup';
 try { source = JSON.parse(input).source || 'startup'; } catch {}
 
+// --- Spawn background update checker (non-blocking) ---
+const checkUpdateScript = path.join(path.dirname(__filename), 'check-update.js');
+if (fs.existsSync(checkUpdateScript)) {
+  try {
+    const { spawn } = require('child_process');
+    const child = spawn(process.execPath, [checkUpdateScript], {
+      stdio: 'ignore',
+      detached: true,
+      windowsHide: true,
+      env: { ...process.env, CLAUDE_PROJECT_DIR: PROJECT_DIR }
+    });
+    child.unref();
+  } catch {}
+}
+
 // --- File rotation helpers ---
 
 function rotateBySize(filePath, maxBytes, keepLines) {
@@ -227,6 +242,20 @@ if (useCompactBriefing) {
   briefing += '=== END BRIEFING — Read CLAUDE.md for full project context ===\n';
   briefing += 'IMPORTANT: Always check .mind/STATE.md for the latest state before starting work.\n';
 }
+
+// --- Update notification (read from cached check) ---
+try {
+  const os = require('os');
+  const cacheFile = path.join(os.homedir(), '.claude', 'cache', 'memoryforge-update-check.json');
+  if (fs.existsSync(cacheFile)) {
+    const cache = JSON.parse(fs.readFileSync(cacheFile, 'utf-8'));
+    if (cache.update_available && cache.latest && cache.latest !== 'unknown') {
+      briefing += '\n--- UPDATE AVAILABLE ---\n';
+      briefing += `MemoryForge ${cache.latest} is available (installed: ${cache.installed}). `;
+      briefing += 'To update: cd MemoryForge && git pull && node setup.js\n';
+    }
+  }
+} catch {}
 
 // --- Output ---
 console.log(JSON.stringify({

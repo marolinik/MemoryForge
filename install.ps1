@@ -118,7 +118,8 @@ if ($Uninstall) {
     }
 
     $MfHooks = @("session-start.sh", "pre-compact.sh", "session-end.sh",
-                  "session-start.js", "pre-compact.js", "session-end.js")
+                  "session-start.js", "pre-compact.js", "session-end.js",
+                  "check-update.js")
 
     foreach ($hook in $MfHooks) {
         $hookPath = Join-Path $hooksDir $hook

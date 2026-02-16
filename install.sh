@@ -160,7 +160,7 @@ if [ "$UNINSTALL" = true ]; then
     HOOKS_DIR="$TARGET_DIR/scripts/hooks"
   fi
 
-  MF_HOOKS="session-start.sh pre-compact.sh session-end.sh session-start.js pre-compact.js session-end.js"
+  MF_HOOKS="session-start.sh pre-compact.sh session-end.sh session-start.js pre-compact.js session-end.js check-update.js"
 
   for hook in $MF_HOOKS; do
     HOOK_PATH="$HOOKS_DIR/$hook"
