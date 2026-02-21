@@ -129,6 +129,41 @@ function checkClaude() {
   }
 }
 
+// --- Remove MemoryForge hooks from a settings.json ---
+function removeMemoryForgeHooks(settingsPath) {
+  if (!fs.existsSync(settingsPath)) return false;
+
+  const raw = fs.readFileSync(settingsPath, 'utf-8');
+  const settings = JSON.parse(raw);
+  if (!settings.hooks) return false;
+
+  // Backup before modifying
+  fs.copyFileSync(settingsPath, settingsPath + '.backup');
+
+  let changed = false;
+  for (const [event, handlers] of Object.entries(settings.hooks)) {
+    const filtered = handlers.filter(h => {
+      const str = JSON.stringify(h);
+      return !str.includes('session-start.sh') && !str.includes('session-start.js') &&
+        !str.includes('pre-compact.sh') && !str.includes('pre-compact.js') &&
+        !str.includes('session-end.sh') && !str.includes('session-end.js') &&
+        !str.includes('memoryforge');
+    });
+    if (filtered.length !== handlers.length) changed = true;
+    if (filtered.length === 0) {
+      delete settings.hooks[event];
+    } else {
+      settings.hooks[event] = filtered;
+    }
+  }
+  if (Object.keys(settings.hooks).length === 0) delete settings.hooks;
+
+  if (changed) {
+    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
+  }
+  return changed;
+}
+
 // --- Smart merge for settings.json ---
 function mergeSettings(existingPath, mfSettingsPath) {
   const existing = JSON.parse(fs.readFileSync(existingPath, 'utf-8'));
@@ -185,6 +220,7 @@ function mergeMcpJson(existingPath, mfMcpPath) {
 // --- CLI flags ---
 const cliArgs = process.argv.slice(2);
 const DRY_RUN = cliArgs.includes('--dry-run');
+const DOCTOR = cliArgs.includes('--doctor');
 
 if (cliArgs.includes('--help') || cliArgs.includes('-h')) {
   print(`Usage: node setup.js [options]`);
@@ -192,10 +228,119 @@ if (cliArgs.includes('--help') || cliArgs.includes('-h')) {
   print(`Options:`);
   print(`  --help, -h     Show this help message`);
   print(`  --dry-run      Preview what would be installed without making changes`);
+  print(`  --doctor       Diagnose hook scope conflicts and .mind/ state`);
   print();
   print(`Interactive guided installer for MemoryForge.`);
   print(`Run without flags for the full guided experience.`);
   process.exit(0);
+}
+
+// --- Doctor mode ---
+if (DOCTOR) {
+  const { detectConflict, findMfHooks } = require('./scripts/detect-scope-conflict');
+  banner();
+  print(`${c.bold}  MemoryForge Doctor${c.reset}`);
+  blank();
+
+  let issues = 0;
+  const cwd = process.cwd();
+
+  // Check both scopes for hooks
+  const globalSettingsPath = path.join(require('os').homedir(), '.claude', 'settings.json');
+  const projectSettingsPath = path.join(cwd, '.claude', 'settings.json');
+  const globalHooks = findMfHooks(globalSettingsPath);
+  const projectHooks = findMfHooks(projectSettingsPath);
+
+  if (globalHooks.length > 0 && projectHooks.length > 0) {
+    error(`Hooks found in BOTH scopes — hooks will fire twice!`);
+    info(`  Global: ${globalSettingsPath}`);
+    info(`  Project: ${projectSettingsPath}`);
+    blank();
+
+    const rl = createRL();
+    try {
+      print(`  ${c.bold}How to fix:${c.reset}`);
+      print(`    ${c.cyan}g${c.reset} = Keep global, remove from project`);
+      print(`    ${c.cyan}p${c.reset} = Keep project, remove from global`);
+      print(`    ${c.cyan}n${c.reset} = Do nothing`);
+      blank();
+      const choice = await ask(rl, 'Choose [g/p/n]', 'n');
+
+      if (choice === 'g') {
+        if (removeMemoryForgeHooks(projectSettingsPath)) {
+          success('Removed MemoryForge hooks from project settings');
+        }
+      } else if (choice === 'p') {
+        if (removeMemoryForgeHooks(globalSettingsPath)) {
+          success('Removed MemoryForge hooks from global settings');
+        }
+      } else {
+        info('No changes made');
+      }
+    } finally { rl.close(); }
+    issues++;
+  } else if (globalHooks.length > 0) {
+    success(`Hooks: global scope only (${globalSettingsPath})`);
+  } else if (projectHooks.length > 0) {
+    success(`Hooks: project scope only (${projectSettingsPath})`);
+  } else {
+    warn('No MemoryForge hooks found in either scope');
+    issues++;
+  }
+
+  // Check .mind/ state files
+  const mindDir = path.join(cwd, '.mind');
+  const stateFiles = ['STATE.md', 'DECISIONS.md', 'PROGRESS.md', 'SESSION-LOG.md'];
+  for (const file of stateFiles) {
+    if (fs.existsSync(path.join(mindDir, file))) {
+      success(`.mind/${file} exists`);
+    } else {
+      warn(`.mind/${file} missing`);
+      issues++;
+    }
+  }
+
+  // Check hook scripts exist where settings reference them
+  const settingsToCheck = projectHooks.length > 0 ? projectSettingsPath : globalSettingsPath;
+  if (fs.existsSync(settingsToCheck)) {
+    try {
+      const settings = JSON.parse(fs.readFileSync(settingsToCheck, 'utf-8'));
+      if (settings.hooks) {
+        for (const handlers of Object.values(settings.hooks)) {
+          for (const handler of handlers) {
+            for (const hook of (handler.hooks || [])) {
+              if (hook.command) {
+                const cmd = hook.command;
+                // Extract the script path from "node <path>"
+                const match = cmd.match(/^node\s+(?:"([^"]+)"|(\S+))/);
+                if (match) {
+                  const scriptPath = match[1] || match[2];
+                  const resolvedPath = path.isAbsolute(scriptPath)
+                    ? scriptPath
+                    : path.join(cwd, scriptPath);
+                  if (fs.existsSync(resolvedPath)) {
+                    success(`Hook script exists: ${scriptPath}`);
+                  } else {
+                    error(`Hook script missing: ${resolvedPath}`);
+                    issues++;
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    } catch { /* ignore parse errors */ }
+  }
+
+  blank();
+  if (issues === 0) {
+    print(`${c.green}${c.bold}  All checks passed!${c.reset}`);
+  } else {
+    print(`${c.yellow}${c.bold}  ${issues} issue(s) found.${c.reset}`);
+  }
+  blank();
+  process.exit(issues > 0 ? 1 : 0);
 }
 
 async function main() {
@@ -256,6 +401,38 @@ async function main() {
       }
     }
 
+    // --- Conflict check ---
+    const { detectConflict } = require('./scripts/detect-scope-conflict');
+    const conflict = detectConflict({ scope: 'project', targetDir });
+    if (conflict.conflict) {
+      blank();
+      warn(`MemoryForge hooks already exist in ${conflict.otherScope} scope!`);
+      info(`  ${conflict.otherPath}`);
+      info(`  Hooks in both scopes will fire twice, causing duplicates.`);
+      blank();
+      print(`  ${c.bold}Options:${c.reset}`);
+      print(`    ${c.cyan}s${c.reset} = Skip (abort — safe, default)`);
+      print(`    ${c.cyan}m${c.reset} = Migrate (remove from ${conflict.otherScope}, install here)`);
+      print(`    ${c.cyan}f${c.reset} = Force (proceed with warning)`);
+      blank();
+      const choice = await ask(rl, 'Choose [s/m/f]', 's');
+
+      if (choice === 'm') {
+        if (removeMemoryForgeHooks(conflict.otherPath)) {
+          success(`Removed MemoryForge hooks from ${conflict.otherScope} settings`);
+        } else {
+          warn('Could not remove hooks from other scope — proceeding anyway');
+        }
+      } else if (choice === 'f') {
+        warn('Proceeding with force — hooks may fire twice!');
+      } else {
+        error('Setup cancelled to prevent hook duplication.');
+        info(`Run with --doctor to diagnose and fix scope conflicts.`);
+        process.exit(1);
+      }
+      blank();
+    }
+
     blank();
     print(`${c.bold}  Setting up MemoryForge in: ${c.cyan}${targetDir}${c.reset}`);
     blank();
@@ -293,7 +470,7 @@ async function main() {
     currentStep++;
     step(currentStep, totalSteps, 'Configuring Claude Code settings...');
     const settingsPath = path.join(claudeDir, 'settings.json');
-    const mfSettingsPath = path.join(SCRIPT_DIR, '.claude', 'settings.json');
+    const mfSettingsPath = path.join(SCRIPT_DIR, 'templates', 'settings.json.template');
 
     if (fs.existsSync(settingsPath)) {
       if (DRY_RUN) {

@@ -47,6 +47,7 @@ GLOBAL=false
 DRY_RUN=false
 NO_CLAUDE_MD=false
 UNINSTALL=false
+DOCTOR=false
 TARGET_ARG=""
 
 for arg in "$@"; do
@@ -55,6 +56,7 @@ for arg in "$@"; do
     --dry-run)          DRY_RUN=true ;;
     --no-claude-md)     NO_CLAUDE_MD=true ;;
     --uninstall)        UNINSTALL=true ;;
+    --doctor)           DOCTOR=true ;;
     --help|-h)
       echo "Usage: bash install.sh [target-dir] [flags]"
       echo ""
@@ -65,6 +67,7 @@ for arg in "$@"; do
       echo "  --dry-run          Preview what would change (no writes)"
       echo "  --no-claude-md     Skip adding Mind Protocol to CLAUDE.md"
       echo "  --uninstall        Remove MemoryForge from the project"
+      echo "  --doctor           Diagnose hook scope conflicts and .mind/ state"
       echo ""
       echo "  --help             Show this help"
       exit 0
@@ -331,8 +334,179 @@ if [ "$UNINSTALL" = true ]; then
   else
     echo -e "${DIM}  Nothing to remove — MemoryForge doesn't appear to be installed.${NC}"
   fi
+
+  # Cross-scope hint
+  if [ "$GLOBAL" = true ]; then
+    if [ -f "$TARGET_DIR/.claude/settings.json" ] && grep -qE "session-start\.(sh|js)" "$TARGET_DIR/.claude/settings.json" 2>/dev/null; then
+      echo ""
+      echo -e "  ${YELLOW}Note:${NC} Project-level hooks still exist."
+      echo -e "  ${DIM}Run: bash install.sh --uninstall${NC}"
+    fi
+  else
+    if [ -f "$HOME/.claude/settings.json" ] && grep -qE "session-start\.(sh|js)" "$HOME/.claude/settings.json" 2>/dev/null; then
+      echo ""
+      echo -e "  ${YELLOW}Note:${NC} Global hooks still exist."
+      echo -e "  ${DIM}Run: bash install.sh --global --uninstall${NC}"
+    fi
+  fi
+
   echo ""
   exit 0
+fi
+
+# =============================================================================
+# DOCTOR MODE
+# =============================================================================
+if [ "$DOCTOR" = true ]; then
+  echo ""
+  echo -e "${BOLD}${BLUE}  MemoryForge Doctor${NC}"
+  echo ""
+
+  ISSUES=0
+
+  # Check both scopes for hooks
+  GLOBAL_SETTINGS="$HOME/.claude/settings.json"
+  PROJECT_SETTINGS="$TARGET_DIR/.claude/settings.json"
+  HAS_GLOBAL=false
+  HAS_PROJECT=false
+
+  if [ -f "$GLOBAL_SETTINGS" ] && grep -qE "session-start\.(sh|js)" "$GLOBAL_SETTINGS" 2>/dev/null; then
+    HAS_GLOBAL=true
+  fi
+  if [ -f "$PROJECT_SETTINGS" ] && grep -qE "session-start\.(sh|js)" "$PROJECT_SETTINGS" 2>/dev/null; then
+    HAS_PROJECT=true
+  fi
+
+  if [ "$HAS_GLOBAL" = true ] && [ "$HAS_PROJECT" = true ]; then
+    echo -e "    ${RED}✗ Hooks found in BOTH scopes — hooks will fire twice!${NC}"
+    echo -e "      Global:  $GLOBAL_SETTINGS"
+    echo -e "      Project: $PROJECT_SETTINGS"
+    echo ""
+    echo -e "    ${BOLD}How to fix:${NC}"
+    echo -e "      ${CYAN}g${NC} = Keep global, remove from project"
+    echo -e "      ${CYAN}p${NC} = Keep project, remove from global"
+    echo -e "      ${CYAN}n${NC} = Do nothing"
+    echo ""
+    read -r -p "    Choose [g/p/n]: " DOCTOR_CHOICE
+    case "$DOCTOR_CHOICE" in
+      g)
+        SETTINGS_FILE="$PROJECT_SETTINGS" node "$SCRIPT_DIR/scripts/detect-scope-conflict.js" 2>/dev/null || true
+        SETTINGS_FILE="$PROJECT_SETTINGS" node -e "
+          const fs = require('fs');
+          const p = process.env.SETTINGS_FILE;
+          const s = JSON.parse(fs.readFileSync(p, 'utf-8'));
+          if (s.hooks) {
+            for (const [event, handlers] of Object.entries(s.hooks)) {
+              s.hooks[event] = handlers.filter(h => {
+                const str = JSON.stringify(h);
+                return !str.includes('session-start.sh') && !str.includes('session-start.js') &&
+                  !str.includes('pre-compact.sh') && !str.includes('pre-compact.js') &&
+                  !str.includes('session-end.sh') && !str.includes('session-end.js') &&
+                  !str.includes('memoryforge');
+              });
+              if (s.hooks[event].length === 0) delete s.hooks[event];
+            }
+            if (Object.keys(s.hooks).length === 0) delete s.hooks;
+          }
+          fs.writeFileSync(p, JSON.stringify(s, null, 2) + '\n');
+        " 2>/dev/null && ok "Removed MemoryForge hooks from project settings" || warn "Could not clean project settings"
+        ;;
+      p)
+        cp "$GLOBAL_SETTINGS" "${GLOBAL_SETTINGS}.backup"
+        SETTINGS_FILE="$GLOBAL_SETTINGS" node -e "
+          const fs = require('fs');
+          const p = process.env.SETTINGS_FILE;
+          const s = JSON.parse(fs.readFileSync(p, 'utf-8'));
+          if (s.hooks) {
+            for (const [event, handlers] of Object.entries(s.hooks)) {
+              s.hooks[event] = handlers.filter(h => {
+                const str = JSON.stringify(h);
+                return !str.includes('session-start.sh') && !str.includes('session-start.js') &&
+                  !str.includes('pre-compact.sh') && !str.includes('pre-compact.js') &&
+                  !str.includes('session-end.sh') && !str.includes('session-end.js') &&
+                  !str.includes('memoryforge');
+              });
+              if (s.hooks[event].length === 0) delete s.hooks[event];
+            }
+            if (Object.keys(s.hooks).length === 0) delete s.hooks;
+          }
+          fs.writeFileSync(p, JSON.stringify(s, null, 2) + '\n');
+        " 2>/dev/null && ok "Removed MemoryForge hooks from global settings" || warn "Could not clean global settings"
+        ;;
+      *)
+        echo -e "    ${DIM}No changes made${NC}"
+        ;;
+    esac
+    ISSUES=$((ISSUES + 1))
+  elif [ "$HAS_GLOBAL" = true ]; then
+    ok "Hooks: global scope only ($GLOBAL_SETTINGS)"
+  elif [ "$HAS_PROJECT" = true ]; then
+    ok "Hooks: project scope only ($PROJECT_SETTINGS)"
+  else
+    warn "No MemoryForge hooks found in either scope"
+    ISSUES=$((ISSUES + 1))
+  fi
+
+  # Check .mind/ state files
+  for file in STATE.md DECISIONS.md PROGRESS.md SESSION-LOG.md; do
+    if [ -f "$TARGET_DIR/.mind/$file" ]; then
+      ok ".mind/$file exists"
+    else
+      warn ".mind/$file missing"
+      ISSUES=$((ISSUES + 1))
+    fi
+  done
+
+  # Check hook scripts exist where settings reference them
+  CHECK_SETTINGS=""
+  if [ "$HAS_PROJECT" = true ]; then
+    CHECK_SETTINGS="$PROJECT_SETTINGS"
+  elif [ "$HAS_GLOBAL" = true ]; then
+    CHECK_SETTINGS="$GLOBAL_SETTINGS"
+  fi
+
+  if [ -n "$CHECK_SETTINGS" ] && [ -f "$CHECK_SETTINGS" ]; then
+    CHECK_FILE="$CHECK_SETTINGS" TARGET="$TARGET_DIR" node -e "
+      const fs = require('fs');
+      const path = require('path');
+      const s = JSON.parse(fs.readFileSync(process.env.CHECK_FILE, 'utf-8'));
+      const target = process.env.TARGET;
+      if (s.hooks) {
+        for (const handlers of Object.values(s.hooks)) {
+          for (const handler of handlers) {
+            for (const hook of (handler.hooks || [])) {
+              if (hook.command) {
+                const m = hook.command.match(/^node\s+(?:\"([^\"]+)\"|(\S+))/);
+                if (m) {
+                  const sp = m[1] || m[2];
+                  const rp = path.isAbsolute(sp) ? sp : path.join(target, sp);
+                  if (fs.existsSync(rp)) {
+                    console.log('OK:' + sp);
+                  } else {
+                    console.log('MISSING:' + rp);
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    " 2>/dev/null | while IFS= read -r line; do
+      case "$line" in
+        OK:*)     ok "Hook script exists: ${line#OK:}" ;;
+        MISSING:*) echo -e "    ${RED}✗ Hook script missing: ${line#MISSING:}${NC}"; ;;
+      esac
+    done
+  fi
+
+  echo ""
+  if [ "$ISSUES" -eq 0 ]; then
+    echo -e "${BOLD}${GREEN}  All checks passed!${NC}"
+  else
+    echo -e "${BOLD}${YELLOW}  $ISSUES issue(s) found.${NC}"
+  fi
+  echo ""
+  exit "$ISSUES"
 fi
 
 # =============================================================================
@@ -354,6 +528,63 @@ else
   echo -e "  ${CYAN}Target${NC}  $TARGET_DIR ${DIM}(project-level)${NC}"
 fi
 echo ""
+
+# --- Pre-flight conflict check ---
+if [ "$GLOBAL" = true ]; then
+  CONFLICT_SCOPE="global"
+else
+  CONFLICT_SCOPE="project"
+fi
+
+CONFLICT_JSON=$(node "$SCRIPT_DIR/scripts/detect-scope-conflict.js" --scope "$CONFLICT_SCOPE" --target "$TARGET_DIR" 2>/dev/null || true)
+if echo "$CONFLICT_JSON" | node -e "const d=JSON.parse(require('fs').readFileSync(0,'utf-8'));process.exit(d.conflict?0:1)" 2>/dev/null; then
+  CONFLICT_OTHER=$(echo "$CONFLICT_JSON" | node -e "const d=JSON.parse(require('fs').readFileSync(0,'utf-8'));console.log(d.otherScope)" 2>/dev/null)
+  CONFLICT_PATH=$(echo "$CONFLICT_JSON" | node -e "const d=JSON.parse(require('fs').readFileSync(0,'utf-8'));console.log(d.otherPath)" 2>/dev/null)
+  echo -e "  ${YELLOW}! MemoryForge hooks already exist in ${CONFLICT_OTHER} scope!${NC}"
+  echo -e "    ${DIM}${CONFLICT_PATH}${NC}"
+  echo -e "    ${DIM}Hooks in both scopes will fire twice, causing duplicates.${NC}"
+  echo ""
+  echo -e "  ${BOLD}Options:${NC}"
+  echo -e "    ${CYAN}s${NC} = Skip (abort — safe, default)"
+  echo -e "    ${CYAN}m${NC} = Migrate (remove from ${CONFLICT_OTHER}, install here)"
+  echo -e "    ${CYAN}f${NC} = Force (proceed with warning)"
+  echo ""
+  read -r -p "  Choose [s/m/f]: " CONFLICT_CHOICE
+  case "$CONFLICT_CHOICE" in
+    m)
+      cp "$CONFLICT_PATH" "${CONFLICT_PATH}.backup"
+      SETTINGS_FILE="$CONFLICT_PATH" node -e "
+        const fs = require('fs');
+        const p = process.env.SETTINGS_FILE;
+        const s = JSON.parse(fs.readFileSync(p, 'utf-8'));
+        if (s.hooks) {
+          for (const [event, handlers] of Object.entries(s.hooks)) {
+            s.hooks[event] = handlers.filter(h => {
+              const str = JSON.stringify(h);
+              return !str.includes('session-start.sh') && !str.includes('session-start.js') &&
+                !str.includes('pre-compact.sh') && !str.includes('pre-compact.js') &&
+                !str.includes('session-end.sh') && !str.includes('session-end.js') &&
+                !str.includes('memoryforge');
+            });
+            if (s.hooks[event].length === 0) delete s.hooks[event];
+          }
+          if (Object.keys(s.hooks).length === 0) delete s.hooks;
+        }
+        fs.writeFileSync(p, JSON.stringify(s, null, 2) + '\n');
+      " 2>/dev/null && ok "Removed MemoryForge hooks from ${CONFLICT_OTHER} settings" || warn "Could not clean ${CONFLICT_OTHER} settings"
+      echo ""
+      ;;
+    f)
+      warn "Proceeding with force — hooks may fire twice!"
+      echo ""
+      ;;
+    *)
+      echo -e "  ${DIM}Setup cancelled to prevent hook duplication.${NC}"
+      echo -e "  ${DIM}Run with --doctor to diagnose and fix scope conflicts.${NC}"
+      exit 1
+      ;;
+  esac
+fi
 
 # Calculate total steps (6 base for project-level, 5 for global or no-claude-md)
 if [ "$GLOBAL" = true ] || [ "$NO_CLAUDE_MD" = true ]; then
@@ -389,7 +620,7 @@ fi
 step "Configuring .claude/settings.json..."
 
 SETTINGS_PATH="$CLAUDE_DIR/settings.json"
-MF_SETTINGS="$SCRIPT_DIR/.claude/settings.json"
+MF_SETTINGS="$SCRIPT_DIR/templates/settings.json.template"
 
 # Prepare a temp copy of MF settings with absolute paths for global install
 if [ "$GLOBAL" = true ]; then

@@ -10,6 +10,7 @@
 #   .\install.ps1 -DryRun                                # Preview changes only
 #   .\install.ps1 -NoClaudeMd                            # Skip CLAUDE.md injection
 #   .\install.ps1 -Uninstall                             # Remove MemoryForge cleanly
+#   .\install.ps1 -Doctor                                # Diagnose hook scope conflicts
 #
 # Docs: https://github.com/marolinik/MemoryForge
 # =============================================================================
@@ -20,6 +21,7 @@ param(
     [switch]$DryRun,
     [switch]$NoClaudeMd,
     [switch]$Uninstall,
+    [switch]$Doctor,
     [switch]$Help
 )
 
@@ -38,6 +40,7 @@ if ($Help) {
     Write-Host "    -DryRun       Preview changes without modifying files"
     Write-Host "    -NoClaudeMd   Skip CLAUDE.md modifications"
     Write-Host "    -Uninstall    Remove MemoryForge from project"
+    Write-Host "    -Doctor       Diagnose hook scope conflicts and .mind/ state"
     Write-Host "    -Help         Show this help message"
     Write-Host ""
     exit 0
@@ -305,8 +308,140 @@ if ($Uninstall) {
     } else {
         Write-Host "  Nothing to remove - MemoryForge doesn't appear to be installed." -ForegroundColor DarkGray
     }
+
+    # Cross-scope hint
+    if ($Global) {
+        $projectSettings = Join-Path $TargetDir ".claude\settings.json"
+        if ((Test-Path $projectSettings) -and ((Get-Content $projectSettings -Raw) -match "session-start\.(sh|js)")) {
+            Write-Host ""
+            Write-Host "  Note: Project-level hooks still exist." -ForegroundColor Yellow
+            Write-Host "  Run: .\install.ps1 -Uninstall" -ForegroundColor DarkGray
+        }
+    } else {
+        $globalSettings = Join-Path $env:USERPROFILE ".claude\settings.json"
+        if ((Test-Path $globalSettings) -and ((Get-Content $globalSettings -Raw) -match "session-start\.(sh|js)")) {
+            Write-Host ""
+            Write-Host "  Note: Global hooks still exist." -ForegroundColor Yellow
+            Write-Host "  Run: .\install.ps1 -Global -Uninstall" -ForegroundColor DarkGray
+        }
+    }
+
     Write-Host ""
     exit 0
+}
+
+# =============================================================================
+# DOCTOR MODE
+# =============================================================================
+if ($Doctor) {
+    Write-Host ""
+    Write-Host "  MemoryForge Doctor" -ForegroundColor Blue
+    Write-Host ""
+
+    $Issues = 0
+
+    # Check both scopes for hooks
+    $globalSettings = Join-Path $env:USERPROFILE ".claude\settings.json"
+    $projectSettings = Join-Path $TargetDir ".claude\settings.json"
+    $hasGlobal = (Test-Path $globalSettings) -and ((Get-Content $globalSettings -Raw -ErrorAction SilentlyContinue) -match "session-start\.(sh|js)")
+    $hasProject = (Test-Path $projectSettings) -and ((Get-Content $projectSettings -Raw -ErrorAction SilentlyContinue) -match "session-start\.(sh|js)")
+
+    if ($hasGlobal -and $hasProject) {
+        Write-Host "    X Hooks found in BOTH scopes - hooks will fire twice!" -ForegroundColor Red
+        Write-Host "      Global:  $globalSettings"
+        Write-Host "      Project: $projectSettings"
+        Write-Host ""
+        Write-Host "    How to fix:"
+        Write-Host "      g = Keep global, remove from project" -ForegroundColor Cyan
+        Write-Host "      p = Keep project, remove from global" -ForegroundColor Cyan
+        Write-Host "      n = Do nothing" -ForegroundColor Cyan
+        Write-Host ""
+        $doctorChoice = Read-Host "    Choose [g/p/n]"
+        switch ($doctorChoice) {
+            'g' {
+                $env:SETTINGS_FILE = ($projectSettings -replace '\\','/')
+                try {
+                    & node -e "const fs=require('fs');const p=process.env.SETTINGS_FILE;const s=JSON.parse(fs.readFileSync(p,'utf-8'));if(s.hooks){for(const[event,handlers]of Object.entries(s.hooks)){s.hooks[event]=handlers.filter(h=>{const t=JSON.stringify(h);return !t.includes('session-start.sh')&&!t.includes('session-start.js')&&!t.includes('pre-compact.sh')&&!t.includes('pre-compact.js')&&!t.includes('session-end.sh')&&!t.includes('session-end.js')&&!t.includes('memoryforge')});if(s.hooks[event].length===0)delete s.hooks[event]}if(Object.keys(s.hooks).length===0)delete s.hooks}fs.writeFileSync(p,JSON.stringify(s,null,2)+'\n')" 2>$null
+                    $env:SETTINGS_FILE = $null
+                    Ok "Removed MemoryForge hooks from project settings"
+                } catch {
+                    $env:SETTINGS_FILE = $null
+                    Warn "Could not clean project settings"
+                }
+            }
+            'p' {
+                Copy-Item $globalSettings "${globalSettings}.backup" -Force
+                $env:SETTINGS_FILE = ($globalSettings -replace '\\','/')
+                try {
+                    & node -e "const fs=require('fs');const p=process.env.SETTINGS_FILE;const s=JSON.parse(fs.readFileSync(p,'utf-8'));if(s.hooks){for(const[event,handlers]of Object.entries(s.hooks)){s.hooks[event]=handlers.filter(h=>{const t=JSON.stringify(h);return !t.includes('session-start.sh')&&!t.includes('session-start.js')&&!t.includes('pre-compact.sh')&&!t.includes('pre-compact.js')&&!t.includes('session-end.sh')&&!t.includes('session-end.js')&&!t.includes('memoryforge')});if(s.hooks[event].length===0)delete s.hooks[event]}if(Object.keys(s.hooks).length===0)delete s.hooks}fs.writeFileSync(p,JSON.stringify(s,null,2)+'\n')" 2>$null
+                    $env:SETTINGS_FILE = $null
+                    Ok "Removed MemoryForge hooks from global settings"
+                } catch {
+                    $env:SETTINGS_FILE = $null
+                    Warn "Could not clean global settings"
+                }
+            }
+            default {
+                Write-Host "    No changes made" -ForegroundColor DarkGray
+            }
+        }
+        $Issues++
+    } elseif ($hasGlobal) {
+        Ok "Hooks: global scope only ($globalSettings)"
+    } elseif ($hasProject) {
+        Ok "Hooks: project scope only ($projectSettings)"
+    } else {
+        Warn "No MemoryForge hooks found in either scope"
+        $Issues++
+    }
+
+    # Check .mind/ state files
+    foreach ($file in @("STATE.md", "DECISIONS.md", "PROGRESS.md", "SESSION-LOG.md")) {
+        $filePath = Join-Path $TargetDir ".mind\$file"
+        if (Test-Path $filePath) {
+            Ok ".mind\$file exists"
+        } else {
+            Warn ".mind\$file missing"
+            $Issues++
+        }
+    }
+
+    # Check hook scripts exist where settings reference them
+    $checkSettings = if ($hasProject) { $projectSettings } elseif ($hasGlobal) { $globalSettings } else { $null }
+    if ($checkSettings -and (Test-Path $checkSettings)) {
+        try {
+            $env:CHECK_FILE = ($checkSettings -replace '\\','/')
+            $env:TARGET = ($TargetDir -replace '\\','/')
+            $scriptChecks = & node -e "
+                const fs=require('fs');const path=require('path');
+                const s=JSON.parse(fs.readFileSync(process.env.CHECK_FILE,'utf-8'));
+                const target=process.env.TARGET;
+                if(s.hooks){for(const handlers of Object.values(s.hooks)){for(const handler of handlers){for(const hook of(handler.hooks||[])){if(hook.command){const m=hook.command.match(/^node\s+(?:\`"([^\`"]+)\`"|(\S+))/);if(m){const sp=m[1]||m[2];const rp=path.isAbsolute(sp)?sp:path.join(target,sp);console.log((fs.existsSync(rp)?'OK:':'MISSING:')+sp)}}}}}}
+            " 2>$null
+            $env:CHECK_FILE = $null
+            $env:TARGET = $null
+            foreach ($line in ($scriptChecks -split "`n")) {
+                if ($line -match '^OK:(.+)') {
+                    Ok "Hook script exists: $($Matches[1])"
+                } elseif ($line -match '^MISSING:(.+)') {
+                    Write-Host "    X Hook script missing: $($Matches[1])" -ForegroundColor Red
+                    $Issues++
+                }
+            }
+        } catch {
+            $env:CHECK_FILE = $null
+            $env:TARGET = $null
+        }
+    }
+
+    Write-Host ""
+    if ($Issues -eq 0) {
+        Write-Host "  All checks passed!" -ForegroundColor Green
+    } else {
+        Write-Host "  $Issues issue(s) found." -ForegroundColor Yellow
+    }
+    Write-Host ""
+    exit $Issues
 }
 
 # =============================================================================
@@ -328,6 +463,56 @@ if ($Global) {
     Write-Host "  Target  $TargetDir (project-level)" -ForegroundColor Cyan
 }
 Write-Host ""
+
+# --- Pre-flight conflict check ---
+$conflictScope = if ($Global) { "global" } else { "project" }
+$conflictJson = $null
+try {
+    $conflictJson = & node "$ScriptDir\scripts\detect-scope-conflict.js" --scope $conflictScope --target $TargetDir 2>$null
+} catch { }
+
+if ($conflictJson) {
+    try {
+        $conflictData = $conflictJson | ConvertFrom-Json
+        if ($conflictData.conflict) {
+            Write-Host "  ! MemoryForge hooks already exist in $($conflictData.otherScope) scope!" -ForegroundColor Yellow
+            Write-Host "    $($conflictData.otherPath)" -ForegroundColor DarkGray
+            Write-Host "    Hooks in both scopes will fire twice, causing duplicates." -ForegroundColor DarkGray
+            Write-Host ""
+            Write-Host "  Options:"
+            Write-Host "    s = Skip (abort - safe, default)" -ForegroundColor Cyan
+            Write-Host "    m = Migrate (remove from $($conflictData.otherScope), install here)" -ForegroundColor Cyan
+            Write-Host "    f = Force (proceed with warning)" -ForegroundColor Cyan
+            Write-Host ""
+            $conflictChoice = Read-Host "  Choose [s/m/f]"
+            switch ($conflictChoice) {
+                'm' {
+                    $otherPath = $conflictData.otherPath
+                    Copy-Item $otherPath "${otherPath}.backup" -Force -ErrorAction SilentlyContinue
+                    $env:SETTINGS_FILE = ($otherPath -replace '\\','/')
+                    try {
+                        & node -e "const fs=require('fs');const p=process.env.SETTINGS_FILE;const s=JSON.parse(fs.readFileSync(p,'utf-8'));if(s.hooks){for(const[event,handlers]of Object.entries(s.hooks)){s.hooks[event]=handlers.filter(h=>{const t=JSON.stringify(h);return !t.includes('session-start.sh')&&!t.includes('session-start.js')&&!t.includes('pre-compact.sh')&&!t.includes('pre-compact.js')&&!t.includes('session-end.sh')&&!t.includes('session-end.js')&&!t.includes('memoryforge')});if(s.hooks[event].length===0)delete s.hooks[event]}if(Object.keys(s.hooks).length===0)delete s.hooks}fs.writeFileSync(p,JSON.stringify(s,null,2)+'\n')" 2>$null
+                        $env:SETTINGS_FILE = $null
+                        Ok "Removed MemoryForge hooks from $($conflictData.otherScope) settings"
+                    } catch {
+                        $env:SETTINGS_FILE = $null
+                        Warn "Could not clean $($conflictData.otherScope) settings"
+                    }
+                    Write-Host ""
+                }
+                'f' {
+                    Warn "Proceeding with force - hooks may fire twice!"
+                    Write-Host ""
+                }
+                default {
+                    Write-Host "  Setup cancelled to prevent hook duplication." -ForegroundColor DarkGray
+                    Write-Host "  Run with -Doctor to diagnose and fix scope conflicts." -ForegroundColor DarkGray
+                    exit 1
+                }
+            }
+        }
+    } catch { }
+}
 
 # Calculate total steps (6 base for project, 5 for global or no-claude-md)
 if ($Global -or $NoClaudeMd) {
@@ -362,7 +547,7 @@ if ($DryRun) {
 Step "Configuring .claude\settings.json..."
 
 $settingsPath = Join-Path $ClaudeDir "settings.json"
-$mfSettings = "$ScriptDir\.claude\settings.json"
+$mfSettings = "$ScriptDir\templates\settings.json.template"
 
 # Prepare temp copy with absolute paths for global install (Node.js, no bash needed)
 $mfSettingsTemp = $null

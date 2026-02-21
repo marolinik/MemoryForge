@@ -138,10 +138,33 @@ cp MemoryForge/templates/memoryforge.config.json.template your-project/.memoryfo
 | Dry run | `--dry-run` | `-DryRun` | Preview changes without writing files |
 | Skip CLAUDE.md | `--no-claude-md` | `-NoClaudeMd` | Skip Mind Protocol injection |
 | Uninstall | `--uninstall` | `-Uninstall` | Cleanly remove MemoryForge |
+| Doctor | `--doctor` | `-Doctor` | Diagnose hook scope conflicts and `.mind/` state |
 
 ### Smart Merge
 
 If you already have hooks in `.claude/settings.json`, the installer adds alongside — never overwrites. A backup is created before any modification.
+
+### Scope Conflict Detection
+
+Claude Code fires hooks from **both** global (`~/.claude/settings.json`) and project (`.claude/settings.json`) scopes simultaneously. If MemoryForge hooks exist in both, every hook fires twice — doubling token usage and risking file corruption.
+
+The installers detect this automatically and offer three options:
+
+- **Skip** (default) — abort to prevent duplication
+- **Migrate** — remove hooks from the other scope, install here
+- **Force** — proceed anyway (not recommended)
+
+To diagnose an existing installation:
+
+```bash
+bash install.sh --doctor
+node setup.js --doctor
+
+# Windows PowerShell:
+.\install.ps1 -Doctor
+```
+
+The doctor checks for dual-scope hooks, missing `.mind/` state files, and broken hook script references.
 
 ### Uninstall
 
@@ -150,6 +173,16 @@ bash install.sh /path/to/project --uninstall
 ```
 
 Removes hooks, scripts, and tracking files. Preserves `.mind/STATE.md`, `PROGRESS.md`, `DECISIONS.md`, `SESSION-LOG.md`.
+
+If hooks exist in the other scope, the uninstaller will hint about it:
+
+```bash
+# Remove from global scope
+bash install.sh --global --uninstall
+
+# Remove from project scope
+bash install.sh --uninstall
+```
 
 ### Updating
 
@@ -212,6 +245,14 @@ Yes. The installer smart-merges MemoryForge hooks alongside yours. Use `--dry-ru
 Yes, and you should. The state files are Markdown designed for git. Tracking files and checkpoints are gitignored.
 </details>
 
+<details>
+<summary><strong>My hooks are firing twice / I see duplicate log entries</strong></summary>
+
+This happens when MemoryForge hooks exist in both global (`~/.claude/settings.json`) and project (`.claude/settings.json`) scopes. Claude Code fires hooks from both scopes simultaneously.
+
+Run `bash install.sh --doctor` (or `node setup.js --doctor`) to detect and fix the conflict. The doctor will offer to remove hooks from one scope.
+</details>
+
 ---
 
 ## Testing
@@ -220,6 +261,7 @@ Yes, and you should. The state files are Markdown designed for git. Tracking fil
 node tests/mcp-server.test.js   # MCP tools + transport + security
 node tests/compress.test.js     # Compression, archival, rotation
 node tests/hooks.test.js        # Hook lifecycle, compaction survival
+node tests/detect-scope.test.js # Scope conflict detection + CLI mode
 ```
 
 CI runs on every push: macOS + Linux + Windows, Node 18/20/22.

@@ -33,6 +33,9 @@ jobs:
       - name: Run hook integration tests
         run: node tests/hooks.test.js
 
+      - name: Run scope conflict detection tests
+        run: node tests/detect-scope.test.js
+
   lint:
     runs-on: ubuntu-latest
     steps:
@@ -48,10 +51,13 @@ jobs:
           node --check scripts/mcp-memory-server.js
           node --check scripts/compress-sessions.js
           node --check scripts/config-keys.js
+          node --check scripts/detect-scope-conflict.js
           node --check setup.js
 
       - name: Verify JSON templates
-        run: node -e "JSON.parse(require('fs').readFileSync('templates/memoryforge.config.json.template','utf-8'));console.log('Valid JSON')"
+        run: |
+          node -e "JSON.parse(require('fs').readFileSync('templates/memoryforge.config.json.template','utf-8'));console.log('config template: Valid JSON')"
+          node -e "JSON.parse(require('fs').readFileSync('templates/settings.json.template','utf-8'));console.log('settings template: Valid JSON')"
 
   shellcheck:
     runs-on: ubuntu-latest
