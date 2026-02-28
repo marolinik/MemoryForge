@@ -131,7 +131,7 @@ None
   "hooks": {
     "SessionStart": [
       {
-        "matcher": "startup|resume|compact",
+        "matcher": "startup|resume|compact|clear",
         "hooks": [
           { "type": "command", "command": "bash existing-hook.sh", "timeout": 5 },
           { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/hooks/session-start.sh\"", "timeout": 15 }

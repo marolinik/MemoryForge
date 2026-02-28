@@ -22,7 +22,7 @@ MemoryForge uses 8 Claude Code hooks to maintain persistent memory. Each hook is
 ### session-start.sh
 
 **When:** Session startup, resume, or after context compaction
-**Matcher:** `startup|resume|compact`
+**Matcher:** `startup|resume|compact|clear`
 **Timeout:** 15 seconds
 
 **What it does:**
@@ -167,7 +167,7 @@ All hooks are configured in `.claude/settings.json`:
 {
   "hooks": {
     "SessionStart": [{
-      "matcher": "startup|resume|compact",
+      "matcher": "startup|resume|compact|clear",
       "hooks": [{
         "type": "command",
         "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/hooks/session-start.sh\"",

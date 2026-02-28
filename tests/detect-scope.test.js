@@ -35,7 +35,7 @@ const { detectConflict, findMfHooks } = require('../scripts/detect-scope-conflic
 const MF_SETTINGS = JSON.stringify({
   hooks: {
     SessionStart: [{
-      matcher: "startup|resume|compact",
+      matcher: "startup|resume|compact|clear",
       hooks: [{ type: "command", command: "node scripts/hooks/session-start.js", timeout: 15 }]
     }],
     PreCompact: [{
